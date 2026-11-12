@@ -1,0 +1,652 @@
+import * as THREE from 'three';
+import { rng, clamp, smooth, U, GLSL_COMMON } from './util.js';
+
+// ---------------------------------------------------------------------------------------------
+// The city is a voxel grid of 5 m chunks. Every building is a hollow shell of chunks drawn by one
+// InstancedMesh; a chunk lives in `grid` so destruction, ray casts and collapse are lookups.
+// ---------------------------------------------------------------------------------------------
+export const CH = 5;
+const NB = 10, ROAD = 20, BLOCK = 70, PITCH = ROAD + BLOCK;
+export const HALF = (NB * PITCH) / 2;            // 450
+const OX = -HALF, OZ = -HALF;
+const GX = (NB * PITCH) / CH, GZ = GX, GY = 48; // 180 x 48 x 180
+
+// ------------------------------------- building material -------------------------------------
+function buildingMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, metalness: 0.05 });
+  m.onBeforeCompile = (s) => {
+    s.uniforms.uTime = U.uTime;
+    s.vertexShader = s.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute vec2 aInfo; attribute float aBurn;
+        varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn;`)
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        { mat4 im = modelMatrix;
+          #ifdef USE_INSTANCING
+            im = modelMatrix * instanceMatrix;
+          #endif
+          vWP = (im * vec4(transformed, 1.0)).xyz; vWN = normalize(mat3(im) * objectNormal); }
+        vInfo = aInfo; vBurn = aBurn;`);
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform float uTime;
+        varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn;
+        float wLit; float wWin; float wGlass;
+        ${GLSL_COMMON}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          vec3 N = normalize(vWN);
+          float roof = step(0.7, N.y), bot = step(N.y, -0.7);
+          vec2 fc = abs(N.x) > 0.5 ? vWP.zy : vWP.xy;
+          float st = vInfo.x, seed = vInfo.y;
+          float glassT = step(st, 0.5), office = step(0.5, st) * step(st, 1.5), brick = step(1.5, st);
+          vec2 sp = mix(mix(vec2(2.5, 3.333), vec2(2.5, 3.333), office), vec2(1.666, 3.333), glassT);
+          bool shop = vWP.y < 4.8;
+          if (shop) sp = vec2(5.0, 5.0);
+          vec2 g = fc / sp, id = floor(g), f = fract(g);
+          vec2 lo = glassT > .5 ? vec2(.04, .07) : office > .5 ? vec2(.1, .3) : vec2(.24, .22);
+          vec2 hi = glassT > .5 ? vec2(.96, .93) : office > .5 ? vec2(.9, .88) : vec2(.76, .82);
+          if (shop) { lo = vec2(.06, .08); hi = vec2(.94, .72); }
+          float wx = smoothstep(lo.x, lo.x + .02, f.x) * smoothstep(hi.x, hi.x - .02, f.x);
+          float wy = smoothstep(lo.y, lo.y + .02, f.y) * smoothstep(hi.y, hi.y - .02, f.y);
+          float win = wx * wy * (1. - roof) * (1. - bot);
+          float h = hash12(id + seed * 37.1 + N.xz * 13.7);
+          float lit = step(shop ? 0.25 : 0.6, h) * win;
+          // facade grime and vertical streaks
+          float grime = 0.85 + 0.25 * vnoise(fc * vec2(0.6, 0.08) + seed * 9.) - 0.12 * smoothstep(8., 0., vWP.y);
+          vec3 base = diffuseColor.rgb * grime;
+          vec3 glass = mix(vec3(0.07, 0.1, 0.13), vec3(0.18, 0.24, 0.3), glassT) * (0.8 + 0.4 * hash12(id * 1.7 + seed));
+          base = mix(base, glass, win);
+          vec3 roofC = vec3(0.2, 0.2, 0.21) * (0.75 + 0.5 * vnoise(vWP.xz * 0.3));
+          base = mix(base, roofC, roof);
+          float burn = vBurn;
+          base *= 1. - 0.88 * smoothstep(0., 1., burn) * (0.75 + 0.25 * vnoise(vWP.xy * 0.9 + vWP.zz));
+          diffuseColor.rgb = base;
+          wLit = lit * (1. - step(0.25, burn)); wWin = win; wGlass = glassT;
+        }`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, mix(0.18, 0.05, wGlass), wWin * (1. - wLit));`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        metalnessFactor = mix(metalnessFactor, mix(0.2, 0.7, wGlass), wWin * (1. - wLit));`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = bumpN(-vViewPosition, normal, vec2(dFdx(wWin), dFdy(wWin)) * 0.35, faceDirection);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        {
+          float hh = hash12(floor(vWP.xy * 0.3) + floor(vWP.zz * 0.3));
+          vec3 warm = mix(vec3(1.0, 0.62, 0.32), vec3(0.75, 0.86, 1.0), step(0.82, hh));
+          totalEmissiveRadiance += wLit * warm * (vWP.y < 4.8 ? 3.2 : 1.7);
+          float ember = smoothstep(0.35, 1.0, vBurn);
+          float fl = 0.55 + 0.45 * sin(uTime * 6.0 + vWP.y * 1.7 + vWP.x * 0.9) * vnoise(vWP.xy * 0.7 + uTime);
+          totalEmissiveRadiance += vec3(1.0, 0.32, 0.05) * ember * fl * 2.2 * vnoise(vWP.xz * 0.8 + vWP.yy * 0.5);
+        }`);
+  };
+  return m;
+}
+
+// scorch decals painted on the ground in a 1024² canvas covering the whole city
+const scorch = { canvas: null, ctx: null, tex: null, dirty: false, t: 0 };
+function scorchPatch(m) {
+  m.onBeforeCompile = (s) => {
+    s.uniforms.uScorch = { value: scorch.tex };
+    s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vSW;')
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        { vec4 w = modelMatrix * vec4(transformed, 1.0);
+          #ifdef USE_INSTANCING
+            w = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
+          #endif
+          vSW = w.xz; }`);
+    s.fragmentShader = s.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D uScorch; varying vec2 vSW;\n${GLSL_COMMON}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        { vec2 su = (vSW + ${HALF.toFixed(1)}) / ${(2 * HALF).toFixed(1)};
+          float sc = (su.x > 0. && su.x < 1. && su.y > 0. && su.y < 1.) ? texture2D(uScorch, vec2(su.x, 1. - su.y)).r : 0.;
+          diffuseColor.rgb *= (1. - 0.85 * sc) * (0.92 + 0.16 * vnoise(vSW * 0.35)); }`);
+  };
+  return m;
+}
+
+export class City {
+  constructor(scene, fx) {
+    this.scene = scene; this.fx = fx;
+    this.grid = new Int32Array(GX * GY * GZ).fill(-1);
+    this.score = 0;
+    this.buildings = [];
+    this._dirtyB = new Set(); this._collapseT = 0;
+    this._buildScorch();
+    this._buildGround();
+    this._layout();
+    this._buildChunks();
+    this._buildDebris();
+    this._buildSkyline();
+  }
+
+  // ---------------------------------------------------------------- ground, roads, blocks
+  _buildScorch() {
+    const c = document.createElement('canvas'); c.width = c.height = 1024;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1024, 1024);
+    scorch.canvas = c; scorch.ctx = ctx; scorch.tex = new THREE.CanvasTexture(c);
+    scorch.tex.colorSpace = THREE.NoColorSpace;
+  }
+  paintScorch(x, z, r, a = 0.7) {
+    const px = ((x + HALF) / (2 * HALF)) * 1024, pz = ((z + HALF) / (2 * HALF)) * 1024, pr = (r / (2 * HALF)) * 1024;
+    if (px < -pr || px > 1024 + pr || pz < -pr || pz > 1024 + pr) return;
+    const g = scorch.ctx.createRadialGradient(px, pz, 0, px, pz, pr);
+    g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(0.6, `rgba(255,255,255,${a * 0.5})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+    scorch.ctx.fillStyle = g; scorch.ctx.beginPath(); scorch.ctx.arc(px, pz, pr, 0, Math.PI * 2); scorch.ctx.fill();
+    scorch.dirty = true;
+  }
+
+  _buildGround() {
+    // far ground
+    const far = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x2a2624, roughness: 1 }));
+    far.position.y = -0.05; far.receiveShadow = true; this.scene.add(far);
+
+    // road surface with markings (canvas)
+    const S = 2048, c = document.createElement('canvas'); c.width = c.height = S;
+    const g = c.getContext('2d'), k = S / (2 * HALF), R = rng(7);
+    g.fillStyle = '#3a3a3c'; g.fillRect(0, 0, S, S);
+    for (let i = 0; i < 26000; i++) { const v = 40 + R() * 30 | 0; g.fillStyle = `rgba(${v},${v},${v + 2},0.35)`; g.fillRect(R() * S, R() * S, 2 + R() * 3, 2 + R() * 3); }
+    for (let i = 0; i < 260; i++) { g.fillStyle = 'rgba(20,20,22,0.25)'; g.beginPath(); g.ellipse(R() * S, R() * S, 4 + R() * 14, 3 + R() * 8, R() * 3, 0, 7); g.fill(); }
+    g.lineWidth = 1.3; g.strokeStyle = 'rgba(235,225,200,0.75)'; g.setLineDash([3 * k, 3 * k]);
+    for (let i = 0; i <= NB; i++) {
+      const p = (i * PITCH) * k;
+      g.beginPath(); g.moveTo(p, 0); g.lineTo(p, S); g.stroke();
+      g.beginPath(); g.moveTo(0, p); g.lineTo(S, p); g.stroke();
+    }
+    g.setLineDash([]); g.strokeStyle = 'rgba(230,180,60,0.7)'; g.lineWidth = 1;
+    for (let i = 0; i <= NB; i++) {
+      const p = (i * PITCH) * k;
+      for (const o of [-0.35, 0.35]) {
+        g.beginPath(); g.moveTo(p + o * k, 0); g.lineTo(p + o * k, S); g.stroke();
+        g.beginPath(); g.moveTo(0, p + o * k); g.lineTo(S, p + o * k); g.stroke();
+      }
+    }
+    // crosswalks
+    g.fillStyle = 'rgba(240,235,220,0.8)';
+    for (let i = 0; i <= NB; i++) for (let j = 0; j <= NB; j++) {
+      const cx = i * PITCH * k, cz = j * PITCH * k, w = ROAD / 2 * k;
+      for (let s = -w + 2; s < w - 2; s += 2.4 * k / 1.6) {
+        for (const off of [-w - 3 * k, w + 1 * k]) {
+          g.fillRect(cx + s, cz + off, 1.2 * k / 1.6 * 1.3, 2 * k);
+          g.fillRect(cx + off, cz + s, 2 * k, 1.2 * k / 1.6 * 1.3);
+        }
+      }
+    }
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+    // roads are centred on multiples of PITCH from -HALF: shift texture by half a road
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(2 * HALF + ROAD, 2 * HALF + ROAD).rotateX(-Math.PI / 2),
+      scorchPatch(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.92, metalness: 0 })));
+    road.receiveShadow = true; this.scene.add(road);
+    // texture offset so road lines sit on x = -HALF + i*PITCH
+    tex.repeat.set((2 * HALF) / (2 * HALF + ROAD), (2 * HALF) / (2 * HALF + ROAD));
+    tex.offset.set(-(ROAD / 2) / (2 * HALF + ROAD) * 0, 0);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    // simpler: remap plane UVs to world directly
+    const uv = road.geometry.attributes.uv, pos = road.geometry.attributes.position;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) + HALF) / (2 * HALF), 1 - (pos.getZ(i) + HALF) / (2 * HALF));
+    tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    // shift so that line i sits at road centre (road centre = -HALF + i*PITCH, blocks start +ROAD/2)
+    this.roadTex = tex;
+  }
+
+  // -------------------------------------------------------------------- city layout
+  _layout() {
+    const R = rng(1337);
+    this.lots = []; this.blocks = [];
+    for (let i = 0; i < NB; i++) for (let j = 0; j < NB; j++) {
+      const x0 = OX + i * PITCH + ROAD / 2, z0 = OZ + j * PITCH + ROAD / 2;
+      const cx = x0 + BLOCK / 2, cz = z0 + BLOCK / 2, d = Math.hypot(cx, cz);
+      const park = (R() < 0.09 && d > 120) || (i === 4 && j === 6);
+      this.blocks.push({ x0, z0, park });
+      if (park) continue;
+      const bx = x0 + 5, bz = z0 + 5, bw = BLOCK - 10; // 60 x 60 buildable
+      const centre = 1 - smooth(60, 430, d);
+      const hmax = 25 + 190 * centre * centre;
+      const r = R();
+      let rects;
+      if (centre > 0.55 && r < 0.6) rects = [[bx + 5 * ((R() * 2) | 0), bz + 5 * ((R() * 2) | 0), 50 - 5 * ((R() * 3) | 0), 50 - 5 * ((R() * 3) | 0)]];
+      else if (r < 0.45) rects = [[bx, bz, 30 - 5 * (R() < .4), 60], [bx + 35, bz, 25, 25 + 5 * ((R() * 2) | 0)], [bx + 35, bz + 35, 25, 25]];
+      else rects = [[bx, bz, 25, 25], [bx + 30, bz, 30, 25], [bx, bz + 30, 25, 30], [bx + 30, bz + 30, 30, 30]];
+      for (const [x, z, w, dd] of rects) {
+        if (R() < 0.08 && rects.length > 1) continue; // plazas
+        let h = Math.max(3, Math.round((hmax * (0.35 + 0.65 * R())) / CH));
+        if (i === 5 && j === 4 && w >= 40) h = 44; // landmark tower
+        h = Math.min(h, GY - 2);
+        const style = h > 16 ? (R() < 0.7 ? 0 : 1) : h > 7 ? (R() < 0.6 ? 1 : 0) : (R() < 0.7 ? 2 : 1);
+        this.lots.push({ x, z, w, d: dd, h, style, seed: R() });
+      }
+    }
+  }
+
+  _buildChunks() {
+    const cells = []; // [cx,cy,cz,b]
+    const palettes = [
+      [[0.45, 0.5, 0.56], [0.36, 0.42, 0.5], [0.52, 0.55, 0.58], [0.3, 0.34, 0.4]], // glass towers (mullions)
+      [[0.66, 0.62, 0.56], [0.58, 0.56, 0.54], [0.72, 0.68, 0.6], [0.5, 0.48, 0.46]], // office stone
+      [[0.55, 0.28, 0.2], [0.6, 0.38, 0.26], [0.46, 0.25, 0.2], [0.68, 0.55, 0.42]],  // brick
+    ];
+    const R = rng(99);
+    this.lots.forEach((L, b) => {
+      const cx0 = Math.round((L.x - OX) / CH), cz0 = Math.round((L.z - OZ) / CH);
+      const W = L.w / CH, D = L.d / CH;
+      const tall = L.h > 18;
+      const rectAt = (y) => {
+        let s = 0;
+        if (tall && W >= 6 && D >= 6) { if (y >= Math.floor(L.h * 0.62)) s = 1; if (y >= Math.floor(L.h * 0.84)) s = 2; }
+        else if (L.h > 10 && W >= 5 && D >= 5 && y >= Math.floor(L.h * 0.75)) s = 1;
+        return [cx0 + s, cz0 + s, cx0 + W - 1 - s, cz0 + D - 1 - s];
+      };
+      const col = palettes[L.style][(R() * 4) | 0];
+      const bld = { lot: L, cells: [], alive: 0, color: col, top: L.h };
+      for (let y = 0; y < L.h; y++) {
+        const [ax, az, bx, bz] = rectAt(y);
+        const up = y + 1 < L.h ? rectAt(y + 1) : null;
+        for (let x = ax; x <= bx; x++) for (let z = az; z <= bz; z++) {
+          const edge = x === ax || x === bx || z === az || z === bz;
+          const exposed = !up || x < up[0] || x > up[2] || z < up[1] || z > up[3];
+          // floor slabs every 6 levels hold the shell together and give the inside a floor
+          if (edge || exposed || (y % 6 === 5)) cells.push(x, y, z, b);
+        }
+      }
+      this.buildings.push(bld);
+    });
+
+    const n = cells.length / 4; this.nChunks = n;
+    const geo = new THREE.BoxGeometry(CH, CH, CH);
+    const mat = buildingMaterial();
+    const mesh = new THREE.InstancedMesh(geo, mat, n);
+    mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false;
+    this.cx = new Int16Array(n); this.cy = new Int16Array(n); this.cz = new Int16Array(n);
+    this.cb = new Int32Array(n); this.hp = new Float32Array(n); this.alive = new Uint8Array(n);
+    const info = new Float32Array(n * 2), burn = new Float32Array(n);
+    const m = new THREE.Matrix4(), c = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      const x = cells[i * 4], y = cells[i * 4 + 1], z = cells[i * 4 + 2], b = cells[i * 4 + 3];
+      this.cx[i] = x; this.cy[i] = y; this.cz[i] = z; this.cb[i] = b; this.alive[i] = 1;
+      const L = this.lots[b], bld = this.buildings[b];
+      this.hp[i] = L.style === 0 ? 70 : 110;
+      this.grid[this.gi(x, y, z)] = i;
+      bld.cells.push(i); bld.alive++;
+      m.makeTranslation(OX + (x + 0.5) * CH, (y + 0.5) * CH, OZ + (z + 0.5) * CH);
+      mesh.setMatrixAt(i, m);
+      const k = 0.93 + 0.1 * ((x * 7 + z * 13 + b) % 5) / 5;
+      c.setRGB(bld.color[0] * k, bld.color[1] * k, bld.color[2] * k, THREE.SRGBColorSpace);
+      mesh.setColorAt(i, c);
+      info[i * 2] = L.style; info[i * 2 + 1] = L.seed;
+    }
+    geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 2));
+    this.burnAttr = new THREE.InstancedBufferAttribute(burn, 1); this.burnAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('aBurn', this.burnAttr);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh = mesh; this.scene.add(mesh);
+    this._mDirty = [Infinity, -1]; this._bDirty = [Infinity, -1];
+
+    // block slabs (sidewalks / parks)
+    const slab = new THREE.InstancedMesh(new THREE.BoxGeometry(BLOCK, 0.3, BLOCK),
+      scorchPatch(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 })), this.blocks.length);
+    this.blocks.forEach((B, i) => {
+      m.makeTranslation(B.x0 + BLOCK / 2, 0.15, B.z0 + BLOCK / 2); slab.setMatrixAt(i, m);
+      slab.setColorAt(i, B.park ? c.setRGB(0.16, 0.24, 0.1, THREE.SRGBColorSpace) : c.setRGB(0.52, 0.5, 0.48, THREE.SRGBColorSpace));
+    });
+    slab.receiveShadow = true; this.scene.add(slab);
+
+    this._buildProps();
+    this.buildMat = mat;
+  }
+
+  gi(x, y, z) { return (y * GZ + z) * GX + x; }
+  chunkAt(px, py, pz) {
+    const x = Math.floor((px - OX) / CH), y = Math.floor(py / CH), z = Math.floor((pz - OZ) / CH);
+    if (x < 0 || y < 0 || z < 0 || x >= GX || y >= GY || z >= GZ) return -1;
+    return this.grid[this.gi(x, y, z)];
+  }
+  chunkCenter(i, out) { return out.set(OX + (this.cx[i] + 0.5) * CH, (this.cy[i] + 0.5) * CH, OZ + (this.cz[i] + 0.5) * CH); }
+
+  // ----------------------------------------------------------------------- props
+  _buildProps() {
+    const R = rng(4242);
+    this.props = []; this.propHash = new Map();
+    const trees = [], lamps = [], cars = [];
+    for (const B of this.blocks) {
+      if (B.park) {
+        for (let k = 0; k < 26; k++) trees.push([B.x0 + 6 + R() * (BLOCK - 12), B.z0 + 6 + R() * (BLOCK - 12), 0.8 + R() * 0.6]);
+      }
+      // sidewalk trees and lamps on the perimeter
+      for (let s = 6; s < BLOCK - 4; s += 14) {
+        for (const [x, z] of [[B.x0 + s, B.z0 + 2], [B.x0 + s, B.z0 + BLOCK - 2], [B.x0 + 2, B.z0 + s], [B.x0 + BLOCK - 2, B.z0 + s]]) {
+          if (R() < 0.55) trees.push([x, z, 0.6 + R() * 0.3]); else if (R() < 0.6) lamps.push([x, z]);
+        }
+      }
+    }
+    // parked cars along the kerbs
+    for (let i = 0; i <= NB; i++) for (let j = 0; j < NB; j++) {
+      const p = OX + i * PITCH, q0 = OZ + j * PITCH + ROAD / 2 + 4;
+      for (let q = q0; q < q0 + BLOCK - 8; q += 6.5) {
+        if (R() < 0.45) cars.push([p - 7.2, q, 0, R()]);
+        if (R() < 0.45) cars.push([p + 7.2, q, Math.PI, R()]);
+        if (R() < 0.35) cars.push([q, p - 7.2, Math.PI / 2, R()]);
+        if (R() < 0.35) cars.push([q, p + 7.2, -Math.PI / 2, R()]);
+      }
+    }
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), c = new THREE.Color();
+
+    // maple trees: trunk + three-lobed crown
+    const trunkG = new THREE.CylinderGeometry(0.22, 0.35, 4, 6).translate(0, 2, 0);
+    const crownG = (() => {
+      const g = new THREE.IcosahedronGeometry(2.6, 2); const a = g.attributes.position, v = new THREE.Vector3();
+      for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i); const n = 1 + 0.22 * Math.sin(v.x * 2.1 + v.y * 1.3) * Math.cos(v.z * 1.7 - v.y); v.multiplyScalar(n); v.y *= 0.8; a.setXYZ(i, v.x, v.y + 5.4, v.z); }
+      g.computeVertexNormals(); return g;
+    })();
+    const trunk = new THREE.InstancedMesh(trunkG, new THREE.MeshStandardMaterial({ color: 0x3b2a20, roughness: 1 }), trees.length);
+    const crown = new THREE.InstancedMesh(crownG, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 }), trees.length);
+    const leaf = [[0.72, 0.1, 0.05], [0.85, 0.28, 0.06], [0.9, 0.5, 0.1], [0.6, 0.06, 0.06], [0.95, 0.38, 0.08]];
+    trees.forEach(([x, z, sc], i) => {
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), R() * 6.28); s.setScalar(sc * 1.2);
+      m.compose(p.set(x, 0.3, z), q, s); trunk.setMatrixAt(i, m); crown.setMatrixAt(i, m);
+      const L = leaf[(R() * leaf.length) | 0]; crown.setColorAt(i, c.setRGB(L[0], L[1], L[2], THREE.SRGBColorSpace));
+      this._addProp(0, i, x, z, 0.3 + 2.5 * sc);
+    });
+    trunk.castShadow = crown.castShadow = true; crown.receiveShadow = true;
+    this.scene.add(trunk, crown);
+
+    // street lamps
+    const poleG = new THREE.CylinderGeometry(0.1, 0.14, 8, 6).translate(0, 4, 0);
+    const headG = new THREE.BoxGeometry(0.5, 0.25, 1.4).translate(0, 8, 0.5);
+    const pole = new THREE.InstancedMesh(poleG, new THREE.MeshStandardMaterial({ color: 0x222428, roughness: 0.5, metalness: 0.6 }), lamps.length);
+    const head = new THREE.InstancedMesh(headG, new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xffc27a, emissiveIntensity: 5 }), lamps.length);
+    lamps.forEach(([x, z], i) => {
+      // point the lamp head at the road
+      const bx = ((x - OX) % PITCH + PITCH) % PITCH, bz = ((z - OZ) % PITCH + PITCH) % PITCH;
+      const ang = bx < ROAD / 2 + 4 ? -Math.PI / 2 : bx > PITCH - ROAD / 2 - 4 ? Math.PI / 2 : bz < ROAD / 2 + 4 ? Math.PI : 0;
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ang); m.compose(p.set(x, 0.3, z), q, s.setScalar(1));
+      pole.setMatrixAt(i, m); head.setMatrixAt(i, m);
+      this._addProp(1, i, x, z, 1);
+    });
+    pole.castShadow = true; this.scene.add(pole, head);
+
+    // cars
+    const carG = (() => {
+      const a = new THREE.BoxGeometry(1.9, 0.75, 4.4).translate(0, 0.75, 0);
+      const b = new THREE.BoxGeometry(1.7, 0.6, 2.3).translate(0, 1.42, -0.2);
+      const parts = [a, b].map(g => g.toNonIndexed());
+      const pos = [], nor = [];
+      for (const g of parts) { pos.push(...g.attributes.position.array); nor.push(...g.attributes.normal.array); }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+      return g;
+    })();
+    const car = new THREE.InstancedMesh(carG, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.6 }), cars.length);
+    const carCols = [[0.6, 0.05, 0.04], [0.85, 0.85, 0.85], [0.08, 0.08, 0.09], [0.1, 0.2, 0.45], [0.55, 0.55, 0.58], [0.85, 0.6, 0.1]];
+    cars.forEach(([x, z, a, r], i) => {
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), a); m.compose(p.set(x, 0, z), q, s.setScalar(1)); car.setMatrixAt(i, m);
+      const C = carCols[(r * carCols.length) | 0]; car.setColorAt(i, c.setRGB(C[0], C[1], C[2], THREE.SRGBColorSpace));
+      this._addProp(2, i, x, z, 1);
+    });
+    car.castShadow = true; car.receiveShadow = true; this.scene.add(car);
+    this.propMeshes = [[trunk, crown], [pole, head], [car]];
+    this.carCols = cars.map(([, , , r]) => carCols[(r * carCols.length) | 0]);
+  }
+  _addProp(type, idx, x, z, h) {
+    const id = this.props.length; this.props.push({ type, idx, x, z, h, alive: true });
+    const k = `${Math.floor(x / 10)},${Math.floor(z / 10)}`;
+    (this.propHash.get(k) || this.propHash.set(k, []).get(k)).push(id);
+  }
+  destroyProps(px, py, pz, r) {
+    if (py - r > 12) return;
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0), v = new THREE.Vector3();
+    for (let gx = Math.floor((px - r) / 10); gx <= Math.floor((px + r) / 10); gx++)
+      for (let gz = Math.floor((pz - r) / 10); gz <= Math.floor((pz + r) / 10); gz++) {
+        const L = this.propHash.get(`${gx},${gz}`); if (!L) continue;
+        for (const id of L) {
+          const P = this.props[id]; if (!P.alive) continue;
+          if ((P.x - px) ** 2 + (P.h - py) ** 2 + (P.z - pz) ** 2 > r * r) continue;
+          P.alive = false;
+          for (const mesh of this.propMeshes[P.type]) { mesh.setMatrixAt(P.idx, zero); mesh.instanceMatrix.needsUpdate = true; }
+          v.set(P.x - px, 2, P.z - pz).normalize();
+          if (P.type === 2) { // car: burst into burning wreckage
+            const C = this.carCols[P.idx];
+            for (let k = 0; k < 4; k++) this.spawnDebris(P.x, 1, P.z, v.x * 18 + (Math.random() - .5) * 10, 10 + Math.random() * 14, v.z * 18 + (Math.random() - .5) * 10, 0.7 + Math.random() * 0.7, C[0] * 0.6, C[1] * 0.6, C[2] * 0.6);
+            this.fx && this.fx.burnAt(new THREE.Vector3(P.x, 1, P.z), 6);
+          } else if (P.type === 0) {
+            for (let k = 0; k < 3; k++) this.spawnDebris(P.x, 3, P.z, v.x * 12 + (Math.random() - .5) * 8, 6 + Math.random() * 8, v.z * 12, 0.5 + Math.random() * 0.6, 0.6, 0.15, 0.05);
+          }
+        }
+      }
+  }
+
+  // ----------------------------------------------------------------------- destruction
+  _markM(i) { if (i < this._mDirty[0]) this._mDirty[0] = i; if (i > this._mDirty[1]) this._mDirty[1] = i; }
+  _markB(i) { if (i < this._bDirty[0]) this._bDirty[0] = i; if (i > this._bDirty[1]) this._bDirty[1] = i; }
+
+  removeChunk(i, ix = 0, iy = 0, iz = 0, debris = 2) {
+    if (!this.alive[i]) return false;
+    this.alive[i] = 0; this.grid[this.gi(this.cx[i], this.cy[i], this.cz[i])] = -1;
+    this.mesh.setMatrixAt(i, ZERO); this._markM(i);
+    const b = this.cb[i]; this.buildings[b].alive--; this._dirtyB.add(b);
+    this.score++;
+    if (debris) {
+      const x = OX + (this.cx[i] + 0.5) * CH, y = (this.cy[i] + 0.5) * CH, z = OZ + (this.cz[i] + 0.5) * CH;
+      const col = this.buildings[b].color, burnt = 1 - 0.8 * this.burnAttr.array[i];
+      const big = debris >= 2;
+      if (big) this.spawnDebris(x, y, z, ix + rnd(4), iy + rnd(4), iz + rnd(4), CH * (0.55 + Math.random() * 0.25), col[0] * burnt, col[1] * burnt, col[2] * burnt);
+      for (let k = 0; k < (big ? 3 : 2); k++)
+        this.spawnDebris(x + rnd(2), y + rnd(2), z + rnd(2), ix * 1.3 + rnd(12), iy + rnd(10) + 4, iz * 1.3 + rnd(12), 0.6 + Math.random() * 1.4,
+          (k ? 0.18 : col[0]) * burnt, (k ? 0.2 : col[1]) * burnt, (k ? 0.24 : col[2]) * burnt);
+      if (Math.random() < 0.5) this.fx && this.fx.dust(_v.set(x, y, z), 1, 0.4);
+    }
+    return true;
+  }
+
+  // break everything inside a sphere; impulse pushes debris outward
+  destroySphere(c, r, power = 25, maxN = 400) {
+    const x0 = Math.max(0, Math.floor((c.x - r - OX) / CH)), x1 = Math.min(GX - 1, Math.floor((c.x + r - OX) / CH));
+    const y0 = Math.max(0, Math.floor((c.y - r) / CH)), y1 = Math.min(GY - 1, Math.floor((c.y + r) / CH));
+    const z0 = Math.max(0, Math.floor((c.z - r - OZ) / CH)), z1 = Math.min(GZ - 1, Math.floor((c.z + r - OZ) / CH));
+    let n = 0; const rr = (r + CH * 0.5) ** 2;
+    for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+      const i = this.grid[this.gi(x, y, z)]; if (i < 0) continue;
+      const dx = OX + (x + 0.5) * CH - c.x, dy = (y + 0.5) * CH - c.y, dz = OZ + (z + 0.5) * CH - c.z;
+      const d2 = dx * dx + dy * dy + dz * dz; if (d2 > rr) continue;
+      const d = Math.sqrt(d2) + 0.01, k = power * (1.2 - Math.min(1, d / (r + CH)));
+      this.removeChunk(i, dx / d * k, dy / d * k + k * 0.4, dz / d * k, n < 60 ? 2 : n < 160 ? 1 : 0);
+      if (++n >= maxN) return n;
+    }
+    return n;
+  }
+
+  // heat/flame damage: burns facades and eventually knocks chunks out
+  damageSphere(c, r, dmg) {
+    const x0 = Math.max(0, Math.floor((c.x - r - OX) / CH)), x1 = Math.min(GX - 1, Math.floor((c.x + r - OX) / CH));
+    const y0 = Math.max(0, Math.floor((c.y - r) / CH)), y1 = Math.min(GY - 1, Math.floor((c.y + r) / CH));
+    const z0 = Math.max(0, Math.floor((c.z - r - OZ) / CH)), z1 = Math.min(GZ - 1, Math.floor((c.z + r - OZ) / CH));
+    let hit = 0;
+    for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+      const i = this.grid[this.gi(x, y, z)]; if (i < 0) continue;
+      hit++;
+      this.hp[i] -= dmg;
+      const b = this.burnAttr.array;
+      if (b[i] < 1) { b[i] = Math.min(1, b[i] + dmg * 0.012); this._markB(i); }
+      if (this.hp[i] <= 0) this.removeChunk(i, rnd(6), 4, rnd(6), 1);
+    }
+    return hit;
+  }
+
+  // voxel DDA through the grid; returns distance to the first chunk or ground (Infinity if none)
+  raycast(o, d, maxT, out) {
+    let x = Math.floor((o.x - OX) / CH), y = Math.floor(o.y / CH), z = Math.floor((o.z - OZ) / CH);
+    const sx = d.x > 0 ? 1 : -1, sy = d.y > 0 ? 1 : -1, sz = d.z > 0 ? 1 : -1;
+    const tdx = d.x !== 0 ? CH / Math.abs(d.x) : Infinity, tdy = d.y !== 0 ? CH / Math.abs(d.y) : Infinity, tdz = d.z !== 0 ? CH / Math.abs(d.z) : Infinity;
+    let tx = d.x !== 0 ? ((x + (sx > 0 ? 1 : 0)) * CH + OX - o.x) / d.x : Infinity;
+    let ty = d.y !== 0 ? ((y + (sy > 0 ? 1 : 0)) * CH - o.y) / d.y : Infinity;
+    let tz = d.z !== 0 ? ((z + (sz > 0 ? 1 : 0)) * CH + OZ - o.z) / d.z : Infinity;
+    const tg = d.y < 0 ? -o.y / d.y : Infinity;
+    let t = 0;
+    const lim = Math.min(maxT, tg);
+    for (let k = 0; k < 600 && t <= lim; k++) {
+      if (x >= 0 && y >= 0 && z >= 0 && x < GX && y < GY && z < GZ) {
+        const i = this.grid[this.gi(x, y, z)];
+        if (i >= 0) { if (out) { out.index = i; out.t = t; } return t; }
+      }
+      if (tx < ty && tx < tz) { t = tx; tx += tdx; x += sx; }
+      else if (ty < tz) { t = ty; ty += tdy; y += sy; }
+      else { t = tz; tz += tdz; z += sz; }
+    }
+    if (tg <= maxT) { if (out) { out.index = -1; out.t = tg; } return tg; }
+    if (out) { out.index = -1; out.t = Infinity; }
+    return Infinity;
+  }
+
+  // anything not connected to the ground through its own building falls
+  _collapse() {
+    const stack = [], seen = new Uint8Array(0);
+    for (const b of this._dirtyB) {
+      const B = this.buildings[b]; if (B.alive <= 0) continue;
+      const mark = new Set();
+      for (const i of B.cells) if (this.alive[i] && this.cy[i] === 0) { mark.add(i); stack.push(i); }
+      while (stack.length) {
+        const i = stack.pop(), x = this.cx[i], y = this.cy[i], z = this.cz[i];
+        const nb = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+        for (const [dx, dy, dz] of nb) {
+          const X = x + dx, Yy = y + dy, Z = z + dz;
+          if (X < 0 || Yy < 0 || Z < 0 || X >= GX || Yy >= GY || Z >= GZ) continue;
+          const j = this.grid[this.gi(X, Yy, Z)];
+          if (j >= 0 && this.cb[j] === b && !mark.has(j)) { mark.add(j); stack.push(j); }
+        }
+      }
+      let falling = 0;
+      for (const i of B.cells) {
+        if (!this.alive[i] || mark.has(i)) continue;
+        // detach and drop as one big piece, slight random drift so the mass crumbles as it falls
+        const x = OX + (this.cx[i] + 0.5) * CH, y = (this.cy[i] + 0.5) * CH, z = OZ + (this.cz[i] + 0.5) * CH;
+        this.alive[i] = 0; this.grid[this.gi(this.cx[i], this.cy[i], this.cz[i])] = -1;
+        this.mesh.setMatrixAt(i, ZERO); this._markM(i); B.alive--; this.score++;
+        const col = B.color, burnt = 1 - 0.8 * this.burnAttr.array[i];
+        this.spawnDebris(x, y, z, rnd(1.5), -1 - Math.random() * 2, rnd(1.5), CH * 0.97, col[0] * burnt, col[1] * burnt, col[2] * burnt, true);
+        falling++;
+      }
+      if (falling > 6) this.onCollapse && this.onCollapse(falling, B);
+    }
+    this._dirtyB.clear();
+  }
+
+  // ----------------------------------------------------------------------- debris
+  _buildDebris() {
+    const N = 9000; this.dN = N;
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }), N);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
+    mesh.count = 0;
+    const c = new THREE.Color(1, 1, 1); for (let i = 0; i < N; i++) mesh.setColorAt(i, c);
+    this.dMesh = mesh; this.scene.add(mesh);
+    this.dP = new Float32Array(N * 3); this.dV = new Float32Array(N * 3); this.dQ = new Float32Array(N * 4); this.dW = new Float32Array(N * 3);
+    this.dS = new Float32Array(N); this.dL = new Float32Array(N); this.dState = new Uint8Array(N); this.dHeavy = new Uint8Array(N);
+    this.dNext = 0; this.dHigh = 0; this.dLive = 0;
+  }
+  spawnDebris(x, y, z, vx, vy, vz, s, r, g, b, heavy = false) {
+    // ring allocation: overwrite the oldest slot
+    const i = this.dNext; this.dNext = (this.dNext + 1) % this.dN;
+    if (i + 1 > this.dHigh) this.dHigh = i + 1;
+    this.dP[i * 3] = x; this.dP[i * 3 + 1] = y; this.dP[i * 3 + 2] = z;
+    this.dV[i * 3] = vx; this.dV[i * 3 + 1] = vy; this.dV[i * 3 + 2] = vz;
+    const q = _q.setFromEuler(_e.set(heavy ? rnd(0.04) : Math.random() * 6, heavy ? rnd(0.04) : Math.random() * 6, heavy ? rnd(0.04) : Math.random() * 6));
+    this.dQ[i * 4] = q.x; this.dQ[i * 4 + 1] = q.y; this.dQ[i * 4 + 2] = q.z; this.dQ[i * 4 + 3] = q.w;
+    const w = heavy ? 0.5 : 8;
+    this.dW[i * 3] = rnd(w); this.dW[i * 3 + 1] = rnd(w); this.dW[i * 3 + 2] = rnd(w);
+    this.dS[i] = s; this.dL[i] = 0; this.dState[i] = 1; this.dHeavy[i] = heavy ? 1 : 0;
+    this.dMesh.setColorAt(i, _c.setRGB(r, g, b, THREE.SRGBColorSpace)); this.dMesh.instanceColor.needsUpdate = true;
+  }
+  _updateDebris(dt) {
+    const P = this.dP, V = this.dV, Q = this.dQ, W = this.dW, S = this.dS, L = this.dL, st = this.dState, mesh = this.dMesh;
+    const arr = mesh.instanceMatrix.array;
+    let landedHeavy = 0;
+    for (let i = 0; i < this.dHigh; i++) {
+      if (!st[i]) continue;
+      L[i] += dt;
+      let s = S[i];
+      if (st[i] === 1) {
+        V[i * 3 + 1] -= 24 * dt;
+        const dr = 1 - 0.15 * dt; V[i * 3] *= dr; V[i * 3 + 2] *= dr;
+        P[i * 3] += V[i * 3] * dt; P[i * 3 + 1] += V[i * 3 + 1] * dt; P[i * 3 + 2] += V[i * 3 + 2] * dt;
+        // falling heavy pieces crush what is below them: progressive collapse into neighbours
+        if (this.dHeavy[i] && V[i * 3 + 1] < -14) {
+          const j = this.chunkAt(P[i * 3], P[i * 3 + 1] - s * 0.6, P[i * 3 + 2]);
+          if (j >= 0 && Math.random() < 0.5) { this.removeChunk(j, V[i * 3] * 0.3, -4, V[i * 3 + 2] * 0.3, 1); V[i * 3 + 1] *= 0.55; }
+        }
+        // integrate rotation
+        const wx = W[i * 3], wy = W[i * 3 + 1], wz = W[i * 3 + 2];
+        _q.set(Q[i * 4], Q[i * 4 + 1], Q[i * 4 + 2], Q[i * 4 + 3]);
+        _q2.set(wx * dt * 0.5, wy * dt * 0.5, wz * dt * 0.5, 1).multiply(_q).normalize();
+        Q[i * 4] = _q2.x; Q[i * 4 + 1] = _q2.y; Q[i * 4 + 2] = _q2.z; Q[i * 4 + 3] = _q2.w;
+        const floor = s * 0.42;
+        if (P[i * 3 + 1] < floor) {
+          P[i * 3 + 1] = floor;
+          if (V[i * 3 + 1] < -6) {
+            if (this.dHeavy[i] && V[i * 3 + 1] < -20) landedHeavy++;
+            V[i * 3 + 1] *= -0.25; V[i * 3] *= 0.6; V[i * 3 + 2] *= 0.6; W[i * 3] *= 0.5; W[i * 3 + 1] *= 0.5; W[i * 3 + 2] *= 0.5;
+          } else { st[i] = 2; L[i] = 0; }
+        }
+        if (L[i] > 20) { st[i] = 2; L[i] = 0; }
+      } else if (st[i] === 2) {
+        // rubble rests, then sinks away
+        if (L[i] > 40) { P[i * 3 + 1] -= dt * 0.6; if (P[i * 3 + 1] < -s) { st[i] = 0; s = 0; } }
+      }
+      // write matrix (compose from quaternion)
+      const x = Q[i * 4], y = Q[i * 4 + 1], z = Q[i * 4 + 2], w = Q[i * 4 + 3];
+      const x2 = x + x, y2 = y + y, z2 = z + z, xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2;
+      const o = i * 16;
+      if (!st[i]) { for (let k = 0; k < 16; k++) arr[o + k] = 0; continue; }
+      arr[o] = (1 - (yy + zz)) * s; arr[o + 1] = (xy + wz) * s; arr[o + 2] = (xz - wy) * s; arr[o + 3] = 0;
+      arr[o + 4] = (xy - wz) * s; arr[o + 5] = (1 - (xx + zz)) * s; arr[o + 6] = (yz + wx) * s; arr[o + 7] = 0;
+      arr[o + 8] = (xz + wy) * s; arr[o + 9] = (yz - wx) * s; arr[o + 10] = (1 - (xx + yy)) * s; arr[o + 11] = 0;
+      arr[o + 12] = P[i * 3]; arr[o + 13] = P[i * 3 + 1]; arr[o + 14] = P[i * 3 + 2]; arr[o + 15] = 1;
+    }
+    mesh.count = this.dHigh;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (landedHeavy > 0) this.onHeavyLand && this.onHeavyLand(landedHeavy);
+  }
+
+  // ----------------------------------------------------------------------- distant skyline
+  _buildSkyline() {
+    const R = rng(55), n = 420;
+    const geo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    const info = new Float32Array(n * 2), burn = new Float32Array(n);
+    geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 2));
+    geo.setAttribute('aBurn', new THREE.InstancedBufferAttribute(burn, 1));
+    const mesh = new THREE.InstancedMesh(geo, this.buildMat, n);
+    const m = new THREE.Matrix4(), c = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      const a = R() * Math.PI * 2, d = 560 + R() * 900;
+      const x = Math.cos(a) * d, z = Math.sin(a) * d;
+      const h = (20 + R() * 120) * (1 - (d - 560) / 1400 * 0.5), w = 20 + R() * 40;
+      m.makeScale(w, h, 20 + R() * 40).setPosition(x, 0, z); mesh.setMatrixAt(i, m);
+      const st = h > 70 ? 0 : 1; info[i * 2] = st; info[i * 2 + 1] = R();
+      const v = st ? 0.55 : 0.4; c.setRGB(v, v * 1.02, v * 1.08, THREE.SRGBColorSpace); mesh.setColorAt(i, c);
+    }
+    mesh.castShadow = false; mesh.receiveShadow = true;
+    this.scene.add(mesh);
+  }
+
+  // ----------------------------------------------------------------------- per frame
+  update(dt) {
+    this._collapseT += dt;
+    if (this._dirtyB.size && this._collapseT > 0.12) { this._collapseT = 0; this._collapse(); }
+    this._updateDebris(dt);
+    if (this._mDirty[1] >= 0) {
+      const a = this.mesh.instanceMatrix; a.clearUpdateRanges();
+      a.addUpdateRange(this._mDirty[0] * 16, (this._mDirty[1] - this._mDirty[0] + 1) * 16); a.needsUpdate = true;
+      this._mDirty[0] = Infinity; this._mDirty[1] = -1;
+    }
+    if (this._bDirty[1] >= 0) {
+      const a = this.burnAttr; a.clearUpdateRanges();
+      a.addUpdateRange(this._bDirty[0], this._bDirty[1] - this._bDirty[0] + 1); a.needsUpdate = true;
+      this._bDirty[0] = Infinity; this._bDirty[1] = -1;
+    }
+    scorch.t += dt;
+    if (scorch.dirty && scorch.t > 0.3) { scorch.tex.needsUpdate = true; scorch.dirty = false; scorch.t = 0; }
+  }
+}
+
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _e = new THREE.Euler(), _c = new THREE.Color(), _v = new THREE.Vector3();
+const rnd = (a) => (Math.random() - 0.5) * 2 * a;
+export const CITY = { HALF, CH, GY };
