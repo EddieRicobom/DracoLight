@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GameAudio } from './audio.js';
-import { Dragon, PALETTES } from './dragon.js';
+import { Pokemon } from './pokemon.js';
 import { City, HALF } from './city.js';
 import { FX, Beam, Projectiles } from './fx.js';
 import { clamp, damp, turnToward, U } from './util.js';
@@ -46,8 +46,8 @@ const composer = createVisualPipeline(renderer, scene, camera);
 
 const fx = new FX(scene, camera);
 const city = new City(scene, fx);
-const player = new Dragon(scene, PALETTES.red);
-const hunter = new Dragon(scene, PALETTES.white);
+const player = new Pokemon(scene, 'rayquaza');
+const hunter = new Pokemon(scene, 'deoxys');
 const beam = new Beam(scene);
 const projectiles = new Projectiles(scene);
 player.pos.set(0, 115, 115);
@@ -82,10 +82,10 @@ function end(win) {
   mouse.left = false; beam.hide(); beam.charge(hunter.mouth, 0);
   document.exitPointerLock?.();
   menu.classList.remove('off'); hud.classList.remove('on');
-  $('sub').textContent = win ? 'Vitória · o caçador caiu' : 'Derrota · o caçador venceu';
+  $('sub').textContent = win ? 'Vitória · Deoxys caiu' : 'Derrota · Deoxys venceu';
   $('msg').textContent = win
-    ? `O loong branco foi derrotado. Você destruiu ${city.score} blocos da cidade.`
-    : `O loong branco te derrubou. Você destruiu ${city.score} blocos da cidade. Tente outra vez.`;
+    ? `Deoxys foi derrotado. Você destruiu ${city.score} blocos da cidade.`
+    : `Deoxys te derrubou. Você destruiu ${city.score} blocos da cidade. Tente outra vez.`;
   go.textContent = 'Jogar novamente';
 }
 
@@ -95,7 +95,15 @@ function start() {
   state = 'playing'; menu.classList.add('off'); hud.classList.add('on');
   canvas.requestPointerLock?.();
 }
-go.textContent = 'Iniciar caçada';
+go.disabled = true;
+go.textContent = 'Carregando modelos…';
+Promise.all([player.ready, hunter.ready]).then(() => {
+  go.disabled = false;
+  go.textContent = 'Iniciar caçada';
+}).catch(() => {
+  go.textContent = 'Erro ao carregar modelos';
+  $('status').textContent = 'Atualize a página para tentar novamente.';
+});
 go.addEventListener('click', start);
 canvas.addEventListener('click', () => { if (state === 'playing' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
 document.addEventListener('pointerlockchange', () => {
