@@ -36,6 +36,8 @@ export class Pokemon {
     this.jaw = 0;
     this.hit = 0;
     this.radius = models[kind].radius;
+    this.previousForward = this.fwd.clone();
+    this.bank = 0;
     this.root = new THREE.Group();
     scene.add(this.root);
     this.visible = true;
@@ -110,11 +112,20 @@ export class Pokemon {
     const right = new THREE.Vector3().crossVectors(this.up, f).normalize();
     const up = new THREE.Vector3().crossVectors(f, right).normalize();
     this.root.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, f));
+    if (dt > 0 && this.kind === 'rayquaza') {
+      const turn = new THREE.Vector3().crossVectors(this.previousForward, f).dot(this.up) / dt;
+      const targetBank = THREE.MathUtils.clamp(-turn * 0.35, -0.5, 0.5);
+      this.bank = THREE.MathUtils.lerp(this.bank, targetBank, 1 - Math.exp(-4 * dt));
+      this.root.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(forwardAxis, this.bank));
+    }
+    this.previousForward.copy(f);
     if (this.mixer) this.mixer.update(dt);
     if (this.kind === 'rayquaza') {
       this.bones.forEach((bone, i) => {
         bone.quaternion.copy(this.baseRotations[i]);
-        bone.rotateY(Math.sin(time * 2.2 - i * 0.45) * (i < 17 ? 0.07 : 0.025));
+        const wave = Math.sin(time * 2.5 - i * 0.48);
+        bone.rotateY(wave * (i < 17 ? 0.08 : 0.025));
+        if (i < 17) bone.rotateX(Math.cos(time * 1.7 - i * 0.38) * 0.025);
       });
       if (this.jawBone) this.jawBone.rotation.x = this.jaw * 0.35;
     }

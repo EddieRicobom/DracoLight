@@ -548,14 +548,17 @@ export class City {
         }
         const midX = sumX / tail, midZ = sumZ / tail;
         const driftX = rnd(1.2), driftZ = rnd(1.2), tiltX = rnd(0.018), tiltZ = rnd(0.018), spin = rnd(0.025);
+        const debrisStep = Math.max(1, Math.ceil(tail / 1800));
         for (let q = 0; q < tail; q++) {
           const j = stack[q], x = OX + (this.cx[j] + 0.5) * CH, y = (this.cy[j] + 0.5) * CH, z = OZ + (this.cz[j] + 0.5) * CH;
           this.alive[j] = 0; this.grid[this.gi(this.cx[j], this.cy[j], this.cz[j])] = -1;
           this.mesh.setMatrixAt(j, ZERO); this._markM(j); B.alive--; this.score++;
-          const col = B.color, burnt = 1 - 0.8 * this.burnAttr.array[j];
-          this.spawnDebris(x, y, z, driftX + ((this.cy[j] - minY) * tiltX - (this.cz[j] - midZ) * spin) * CH, -2,
-            driftZ + ((this.cy[j] - minY) * tiltZ + (this.cx[j] - midX) * spin) * CH, CH * 0.97,
-            col[0] * burnt, col[1] * burnt, col[2] * burnt, true);
+          if (q % debrisStep === 0) {
+            const col = B.color, burnt = 1 - 0.8 * this.burnAttr.array[j];
+            this.spawnDebris(x, y, z, driftX + ((this.cy[j] - minY) * tiltX - (this.cz[j] - midZ) * spin) * CH, -2,
+              driftZ + ((this.cy[j] - minY) * tiltZ + (this.cx[j] - midX) * spin) * CH, CH * 0.97,
+              col[0] * burnt, col[1] * burnt, col[2] * burnt, true);
+          }
         }
         falling += tail;
       }
@@ -582,6 +585,7 @@ export class City {
     this.dMesh = mesh; this.scene.add(mesh);
     this.dP = new Float32Array(N * 3); this.dV = new Float32Array(N * 3); this.dQ = new Float32Array(N * 4); this.dW = new Float32Array(N * 3);
     this.dS = new Float32Array(N); this.dL = new Float32Array(N); this.dState = new Uint8Array(N); this.dHeavy = new Uint8Array(N);
+    this.dRest = new Int32Array(N); // supporting chunk index + 1, or zero for the ground
     this.dNext = 0; this.dHigh = 0; this.dLive = 0;
   }
   spawnDebris(x, y, z, vx, vy, vz, s, r, g, b, heavy = false) {
@@ -594,7 +598,7 @@ export class City {
     this.dQ[i * 4] = q.x; this.dQ[i * 4 + 1] = q.y; this.dQ[i * 4 + 2] = q.z; this.dQ[i * 4 + 3] = q.w;
     const w = heavy ? 0.08 : 8;
     this.dW[i * 3] = rnd(w); this.dW[i * 3 + 1] = rnd(w); this.dW[i * 3 + 2] = rnd(w);
-    this.dS[i] = s; this.dL[i] = 0; this.dState[i] = 1; this.dHeavy[i] = heavy ? 1 : 0;
+    this.dS[i] = s; this.dL[i] = 0; this.dState[i] = 1; this.dHeavy[i] = heavy ? 1 : 0; this.dRest[i] = 0;
     this.dMesh.setColorAt(i, _c.setRGB(r, g, b, THREE.SRGBColorSpace)); this.dMesh.instanceColor.needsUpdate = true;
   }
   _updateDebris(dt) {
@@ -604,16 +608,28 @@ export class City {
     for (let i = 0; i < this.dHigh; i++) {
       if (!st[i]) continue;
       L[i] += dt;
+      // Rubble resting on a destroyed roof resumes falling on the next frame.
+      if (st[i] === 2 && this.dRest[i] && !this.alive[this.dRest[i] - 1]) {
+        st[i] = 1; L[i] = 0; V[i * 3 + 1] = 0; this.dRest[i] = 0;
+      }
       if (st[i] === 2 && L[i] <= 40) continue; // settled rubble needs no matrix upload
       let s = S[i];
       if (st[i] === 1) {
-        const p = i * 3, oldBottom = P[p + 1] - s * 0.5;
+        const p = i * 3;
+        const wx = W[p], wy = W[p + 1], wz = W[p + 2];
+        _q.set(Q[i * 4], Q[i * 4 + 1], Q[i * 4 + 2], Q[i * 4 + 3]);
+        _q2.set(wx * dt * 0.5, wy * dt * 0.5, wz * dt * 0.5, 1).multiply(_q).normalize();
+        Q[i * 4] = _q2.x; Q[i * 4 + 1] = _q2.y; Q[i * 4 + 2] = _q2.z; Q[i * 4 + 3] = _q2.w;
+        const qx = _q2.x, qy = _q2.y, qz = _q2.z, qw = _q2.w;
+        const halfY = s * 0.5 * (Math.abs(2 * (qx * qy + qz * qw)) +
+          Math.abs(1 - 2 * (qx * qx + qz * qz)) + Math.abs(2 * (qy * qz - qx * qw)));
+        const oldBottom = P[p + 1] - halfY;
         V[i * 3 + 1] -= 24 * dt;
         const dr = Math.max(0, 1 - 0.15 * dt); V[p] *= dr; V[p + 2] *= dr;
         P[p] += V[p] * dt; P[p + 1] += V[p + 1] * dt; P[p + 2] += V[p + 2] * dt;
         // Sweep the bottom through occupied voxel levels so a fast fragment cannot skip a roof.
         // Only the centre column is sampled; this keeps thousands of fragments inexpensive.
-        let support = 0, bottom = P[p + 1] - s * 0.5;
+        let support = 0, supportId = 0, bottom = P[p + 1] - halfY;
         if (V[p + 1] < 0 && oldBottom >= 0) {
           const x = Math.floor((P[p] - OX) / CH), z = Math.floor((P[p + 2] - OZ) / CH);
           if (x >= 0 && x < GX && z >= 0 && z < GZ) {
@@ -628,22 +644,18 @@ export class City {
                 continue;
               }
               support = top;
+              supportId = j + 1;
               break;
             }
           }
         }
-        // integrate rotation
-        const wx = W[i * 3], wy = W[i * 3 + 1], wz = W[i * 3 + 2];
-        _q.set(Q[i * 4], Q[i * 4 + 1], Q[i * 4 + 2], Q[i * 4 + 3]);
-        _q2.set(wx * dt * 0.5, wy * dt * 0.5, wz * dt * 0.5, 1).multiply(_q).normalize();
-        Q[i * 4] = _q2.x; Q[i * 4 + 1] = _q2.y; Q[i * 4 + 2] = _q2.z; Q[i * 4 + 3] = _q2.w;
-        const floor = support + s * 0.5;
+        const floor = support + halfY;
         if (P[p + 1] < floor) {
           P[p + 1] = floor;
           if (V[i * 3 + 1] < -6) {
             if (support === 0 && this.dHeavy[i] && V[i * 3 + 1] < -20) landedHeavy++;
             V[i * 3 + 1] *= -0.25; V[i * 3] *= 0.6; V[i * 3 + 2] *= 0.6; W[i * 3] *= 0.5; W[i * 3 + 1] *= 0.5; W[i * 3 + 2] *= 0.5;
-          } else { st[i] = 2; L[i] = 0; }
+          } else { st[i] = 2; L[i] = 0; this.dRest[i] = supportId; }
         }
         if (L[i] > 20) { st[i] = 2; L[i] = 0; }
       } else if (st[i] === 2) {

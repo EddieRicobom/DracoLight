@@ -5,9 +5,19 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-// The sky follows the camera so the horizon remains distant throughout the city.
+// City rooftops are around 200 m; the upper atmosphere reaches its full
+// appearance at the game's 12 km flight ceiling.
+export const SKY_CITY_TOP = 220;
+export const SKY_STRATOSPHERE = 12000;
+
+const smooth = (x) => { const t = THREE.MathUtils.clamp(x, 0, 1); return t * t * (3 - 2 * t); };
+
+// The sky follows the camera so the horizon remains distant at every height.
+// updateAltitude is attached to the mesh to preserve the createSky(scene) API.
 export function createSky(scene) {
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(1200, 32, 16), new THREE.ShaderMaterial({
+  const uniforms = { uAltitude: { value: 0 }, uTime: { value: 0 } };
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(1200, 48, 24), new THREE.ShaderMaterial({
+    uniforms,
     side: THREE.BackSide,
     depthWrite: false,
     fog: false,
@@ -16,25 +26,80 @@ export function createSky(scene) {
         vDirection = normalize(position);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }`,
-    fragmentShader: `varying vec3 vDirection;
+    fragmentShader: `uniform float uAltitude;
+      uniform float uTime;
+      varying vec3 vDirection;
+
+      float hash21(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+      float noise2(vec2 p) {
+        vec2 i = floor(p), f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+                   mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+      }
       void main() {
-        float h = vDirection.y;
-        vec3 zenith = vec3(0.055, 0.075, 0.145);
-        vec3 upper = vec3(0.22, 0.19, 0.25);
-        vec3 horizon = vec3(0.59, 0.29, 0.19);
-        vec3 below = vec3(0.13, 0.105, 0.13);
-        vec3 color = mix(horizon, upper, smoothstep(0.0, 0.42, h));
-        color = mix(color, zenith, smoothstep(0.38, 0.9, h));
-        color = mix(below, color, smoothstep(-0.28, 0.02, h));
+        vec3 dir = normalize(vDirection);
+        float h = dir.y;
+        float a = uAltitude;
         vec3 sunDir = normalize(vec3(-180.0, 260.0, 130.0));
-        float facing = max(dot(normalize(vDirection), sunDir), 0.0);
-        color += vec3(1.0, 0.37, 0.13) * pow(facing, 12.0) * 0.16;
-        color += vec3(1.0, 0.67, 0.37) * pow(facing, 160.0) * 0.65;
+        float sun = max(dot(dir, sunDir), 0.0);
+
+        vec3 city = mix(vec3(0.59, 0.29, 0.19), vec3(0.22, 0.19, 0.25), smoothstep(0.0, 0.42, h));
+        city = mix(city, vec3(0.055, 0.075, 0.145), smoothstep(0.38, 0.9, h));
+        city = mix(vec3(0.13, 0.105, 0.13), city, smoothstep(-0.28, 0.02, h));
+
+        float horizon = mix(0.0, -0.14, a);
+        float rim = exp(-pow((h - horizon) / mix(0.25, 0.075, a), 2.0));
+        vec3 upper = mix(vec3(0.007, 0.022, 0.075), vec3(0.002, 0.006, 0.019), smoothstep(0.0, 0.85, h));
+        upper += vec3(0.13, 0.31, 0.56) * rim * (0.65 + 0.35 * sun);
+        upper += vec3(0.23, 0.46, 0.66) * exp(-max(h - horizon, 0.0) * 11.0) * 0.18;
+        vec3 color = mix(city, upper, a);
+
+        // A distant cloud ocean appears below the high-altitude horizon.
+        vec2 cloudUv = dir.xz / max(0.09, -h + 0.22);
+        float cloud = noise2(cloudUv * 13.0 + vec2(uTime * 0.003, 0.0)) * 0.62
+                    + noise2(cloudUv * 27.0 - vec2(uTime * 0.006, 0.0)) * 0.38;
+        float cloudMask = smoothstep(0.44, 0.67, cloud) * (1.0 - smoothstep(-0.25, -0.04, h));
+        color += vec3(0.18, 0.21, 0.23) * cloudMask * smoothstep(0.13, 0.7, a);
+
+        // Sparse fixed stars become visible above the light-scattering layer.
+        vec2 starUv = vec2(atan(dir.z, dir.x), asin(h)) * vec2(95.0, 190.0);
+        vec2 cell = floor(starUv);
+        float star = step(0.9977, hash21(cell));
+        vec2 centre = fract(starUv) - 0.5;
+        star *= exp(-dot(centre, centre) * 95.0);
+        star *= smoothstep(0.05, 0.3, h) * smoothstep(0.38, 0.9, a);
+        color += vec3(0.58, 0.72, 1.0) * star;
+
+        color += mix(vec3(1.0, 0.37, 0.13), vec3(0.55, 0.7, 1.0), a)
+                 * pow(sun, 12.0) * mix(0.16, 0.07, a);
+        color += vec3(1.0, 0.67, 0.37) * pow(sun, 160.0) * 0.65;
+        color += vec3(1.0, 0.9, 0.72) * smoothstep(0.99985, 0.99994, sun) * 0.8;
         gl_FragColor = vec4(color, 1.0);
       }`,
   }));
   sky.frustumCulled = false;
+  sky.renderOrder = -1000;
   scene.add(sky);
+
+  const fog = scene.fog instanceof THREE.FogExp2 ? scene.fog : null;
+  const baseFogDensity = fog?.density ?? 0;
+  const baseFogColor = fog?.color.clone();
+  const highFogColor = new THREE.Color(0x193755);
+  sky.updateAltitude = (height, timeSeconds = 0) => {
+    const altitude = smooth((Math.max(0, height) - SKY_CITY_TOP) / (SKY_STRATOSPHERE - SKY_CITY_TOP));
+    uniforms.uAltitude.value = altitude;
+    uniforms.uTime.value = timeSeconds;
+    if (fog) {
+      fog.density = THREE.MathUtils.lerp(baseFogDensity, 0.00008, altitude);
+      fog.color.copy(baseFogColor).lerp(highFogColor, altitude);
+    }
+    return altitude;
+  };
   return sky;
 }
 

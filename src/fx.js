@@ -160,6 +160,19 @@ export class FX {
     if (Math.random() < 0.3) this.smk.spawn(blue ? STEAM : SMOKE, p.x, p.y, p.z, 0, 2, 0, 1.5, 2, 6);
   }
 
+  // Short luminous wake behind a fast-flying Rayquaza.
+  flightWake(pos, direction) {
+    const A = this.add;
+    for (let k = 0; k < 3; k++) {
+      const spread = 2.5;
+      const i = A.spawn(EMBER, pos.x + (Math.random() - .5) * spread, pos.y + (Math.random() - .5) * spread,
+        pos.z + (Math.random() - .5) * spread, -direction.x * 24 + (Math.random() - .5) * 5,
+        -direction.y * 24 + (Math.random() - .5) * 5, -direction.z * 24 + (Math.random() - .5) * 5,
+        0.45 + Math.random() * 0.3, 0.55, 0.1);
+      A.owner[i] = 0;
+    }
+  }
+
   // ---- update --------------------------------------------------------------------------------
   update(dt, city) {
     // burning spots on buildings/wrecks

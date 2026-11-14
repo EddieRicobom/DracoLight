@@ -19,7 +19,7 @@ soundButton.addEventListener('click', () => {
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x34202a);
 scene.fog = new THREE.FogExp2(0x8d554b, 0.0017);
-const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 1600);
+const camera = new THREE.PerspectiveCamera(70, 1, 1, 26000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -42,6 +42,8 @@ const fill = new THREE.DirectionalLight(0x819cca, 0.8);
 fill.position.set(160, 100, -220);
 scene.add(fill);
 const sky = createSky(scene);
+// Keep the camera inside the sky dome even at the top of the flight envelope.
+sky.scale.setScalar(18);
 const composer = createVisualPipeline(renderer, scene, camera);
 
 const fx = new FX(scene, camera);
@@ -60,11 +62,18 @@ player.update(0, 0); hunter.update(0, 0);
 let state = 'menu', elapsed = 0, hp = 100, enemyHp = 240, stamina = 100;
 let yaw = Math.PI, pitch = 0, speed = 45, breathTime = 0, fireballTime = 0;
 let enemyShot = 1.2, charge = 0, beamTime = 0, beamHitTime = 0, beamCooldown = 5;
-let playerInvuln = 0, enemyInvuln = 0, collisionTime = 0, fpsTime = 0, frames = 0;
+let playerInvuln = 0, enemyInvuln = 0, collisionTime = 0, fpsTime = 0, frames = 0, wakeTime = 0;
 const keys = new Set(), mouse = { left: false };
+const altitudeReadout = document.createElement('span');
+altitudeReadout.setAttribute('aria-live', 'off');
+altitudeReadout.style.cssText = 'display:block;margin-top:6px;font-size:11px;letter-spacing:.08em;color:#cfe8ff';
+$('score').append(altitudeReadout);
 const v = () => new THREE.Vector3();
 const tmp = v(), tmp2 = v(), desired = v(), side = v(), target = v(), old = v();
 const aim = v(), beamDirection = v(), ray = {};
+const MAX_ALTITUDE = 12000;
+const flightBoundary = (height) => HALF - 12 + 1550 * clamp((height - 200) / 1800, 0, 1);
+const altitudeSpeed = (height) => 1 + 2.2 * clamp((height - 150) / 1850, 0, 1);
 
 function resize() {
   const w = innerWidth, h = innerHeight;
@@ -185,7 +194,9 @@ function updateProjectiles(dt) {
     const victim = p.owner === 1 ? hunter : player;
     const hitEnd = target.copy(old).addScaledVector(tmp, Math.min(wall, dist));
     const dragonHit = victim.segDist(old, hitEnd) < 2.5;
-    if (wall < dist || dragonHit || p.life > 4 || p.m.position.length() > HALF * 2) {
+    const limit = flightBoundary(p.m.position.y) + 100;
+    if (wall < dist || dragonHit || p.life > 4 || p.m.position.y < 0 || p.m.position.y > MAX_ALTITUDE + 100 ||
+        Math.abs(p.m.position.x) > limit || Math.abs(p.m.position.z) > limit) {
       if (p.life <= 4) {
         if (wall < dist) p.m.position.copy(hitEnd);
         blast(p.m.position, p.kind, p.owner);
@@ -202,7 +213,7 @@ function updatePlayer(dt) {
   turnToward(f, desired, dt * 2.8);
   side.crossVectors(f, THREE.Object3D.DEFAULT_UP).normalize();
   const boosting = (keys.has('ShiftLeft') || keys.has('ShiftRight')) && stamina > 2;
-  const wanted = boosting ? 110 : keys.has('KeyW') ? 75 : keys.has('KeyS') ? 24 : 48;
+  const wanted = (boosting ? 110 : keys.has('KeyW') ? 75 : keys.has('KeyS') ? 24 : 48) * altitudeSpeed(player.pos.y);
   speed += (wanted - speed) * damp(2.3, dt);
   if (boosting) stamina = Math.max(0, stamina - 21 * dt);
   else stamina = Math.min(100, stamina + 14 * dt);
@@ -212,9 +223,10 @@ function updatePlayer(dt) {
   if (keys.has('KeyD')) player.pos.addScaledVector(side, speed * dt * 0.65);
   if (keys.has('Space')) player.pos.y += speed * dt * 0.8;
   if (keys.has('KeyC')) player.pos.y -= speed * dt * 0.8;
-  player.pos.y = clamp(player.pos.y, 7, 220);
-  player.pos.x = clamp(player.pos.x, -HALF + 12, HALF - 12);
-  player.pos.z = clamp(player.pos.z, -HALF + 12, HALF - 12);
+  player.pos.y = clamp(player.pos.y, 7, MAX_ALTITUDE);
+  const bound = flightBoundary(player.pos.y);
+  player.pos.x = clamp(player.pos.x, -bound, bound);
+  player.pos.z = clamp(player.pos.z, -bound, bound);
   collisionTime -= dt;
   if (city.chunkAt(player.pos.x, player.pos.y, player.pos.z) >= 0 && collisionTime <= 0) {
     collisionTime = 0.22;
@@ -240,6 +252,11 @@ function updatePlayer(dt) {
     }
   } else { breathTime = 0; player.jaw = Math.max(0, player.jaw - dt * 5); }
   player.update(dt, elapsed);
+  wakeTime -= dt;
+  if (boosting && wakeTime <= 0) {
+    wakeTime = 0.05;
+    fx.flightWake(tmp.copy(player.pos).addScaledVector(f, -15), f);
+  }
 }
 
 function updateHunter(dt) {
@@ -252,22 +269,24 @@ function updateHunter(dt) {
     desired.addScaledVector(orbit, 0.75);
     if (range < 55) desired.addScaledVector(toPlayer, -0.025);
   } else desired.addScaledVector(orbit, 0.14);
-  if (hunter.pos.x > HALF - 35 || hunter.pos.x < -HALF + 35 || hunter.pos.z > HALF - 35 || hunter.pos.z < -HALF + 35) {
-    desired.addScaledVector(hunter.pos, -0.005);
+  const bound = flightBoundary(Math.max(hunter.pos.y, player.pos.y));
+  if (hunter.pos.x > bound - 25 || hunter.pos.x < -bound + 25 || hunter.pos.z > bound - 25 || hunter.pos.z < -bound + 25) {
+    desired.x -= hunter.pos.x * 0.005;
+    desired.z -= hunter.pos.z * 0.005;
   }
   desired.y += Math.sin(elapsed * 0.7) * 0.12;
   desired.normalize();
   turnToward(hunter.fwd, desired, dt * 1.3);
-  hunter.pos.addScaledVector(hunter.fwd, dt * (range > 100 ? 60 : 42));
-  hunter.pos.y = clamp(hunter.pos.y, 18, 205);
-  hunter.pos.x = clamp(hunter.pos.x, -HALF + 12, HALF - 12);
-  hunter.pos.z = clamp(hunter.pos.z, -HALF + 12, HALF - 12);
+  hunter.pos.addScaledVector(hunter.fwd, dt * (range > 100 ? 95 : 68) * altitudeSpeed(Math.max(hunter.pos.y, player.pos.y)));
+  hunter.pos.y = clamp(hunter.pos.y, 18, MAX_ALTITUDE);
+  hunter.pos.x = clamp(hunter.pos.x, -bound, bound);
+  hunter.pos.z = clamp(hunter.pos.z, -bound, bound);
   if (city.chunkAt(hunter.pos.x, hunter.pos.y, hunter.pos.z) >= 0) city.destroySphere(hunter.pos, 6, 25, 15);
   if (range < 7) damagePlayer(12);
   hunter.update(dt, elapsed);
   enemyShot -= dt;
   if (range < 240 && enemyShot <= 0 && charge <= 0 && beamTime <= 0) {
-    aim.copy(player.pos).addScaledVector(player.fwd, Math.min(15, speed * 0.13)).sub(hunter.mouth);
+    aim.copy(player.pos).addScaledVector(player.fwd, Math.min(75, speed * 0.18)).sub(hunter.mouth);
     if (city.raycast(hunter.mouth, aim.normalize(), range, ray) === Infinity) {
       projectiles.fire('frost', hunter.mouth, aim.multiplyScalar(105), 2);
       enemyShot = 2.5;
@@ -308,9 +327,10 @@ function updateCamera(dt) {
   camera.position.lerp(elevated, damp(5, dt));
   if (fx.shake > 0.02) camera.position.add(new THREE.Vector3((Math.random() - 0.5) * fx.shake, (Math.random() - 0.5) * fx.shake, 0));
   camera.lookAt(tmp2.copy(player.pos).addScaledVector(player.fwd, 50));
-  sun.position.set(player.pos.x - 180, 260, player.pos.z + 130);
+  sun.position.set(player.pos.x - 180, player.pos.y + 260, player.pos.z + 130);
   sun.target.position.copy(player.pos); sun.target.updateMatrixWorld();
   sky.position.copy(camera.position);
+  sky.updateAltitude?.(player.pos.y, elapsed);
 }
 
 function updateHud(dt) {
@@ -318,6 +338,7 @@ function updateHud(dt) {
   $('hpE').firstElementChild.style.width = `${enemyHp / 240 * 100}%`;
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
+  if (altitudeReadout) altitudeReadout.textContent = `Altitude: ${Math.round(player.pos.y).toLocaleString('pt-BR')} m`;
   $('dmg').style.boxShadow = `inset 0 0 160px rgba(140,200,255,${Math.min(0.65, playerInvuln * 1.5)})`;
   if (enemyInvuln <= 0) $('cross').classList.remove('hit');
   const marker = $('arrow');
@@ -348,6 +369,7 @@ function frame(now) {
   } else if (state === 'menu') {
     camera.position.set(0, 150, 205); camera.lookAt(0, 100, -30);
     sky.position.copy(camera.position);
+    sky.updateAltitude?.(150, U.uTime.value);
     U.uTime.value += dt;
   }
   composer.render();
