@@ -211,7 +211,7 @@ function updatePlayer(dt) {
   if (city.chunkAt(player.pos.x, player.pos.y, player.pos.z) >= 0 && collisionTime <= 0) {
     collisionTime = 0.22;
     if (boosting) { city.destroySphere(player.pos, 7, 45, 16); fx.shake = 0.6; }
-    else { city.destroySphere(player.pos, 5, 22, 8); damagePlayer(8); speed *= 0.55; }
+    else { city.destroySphere(player.pos, 5, 22, 8); damagePlayer(1.6); speed *= 0.55; }
   }
   if (player.pos.y <= 7.1 && f.y < -0.2 && collisionTime <= 0) { collisionTime = 0.5; damagePlayer(10); }
   breathTime -= dt; fireballTime -= dt;
