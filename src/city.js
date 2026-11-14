@@ -280,6 +280,10 @@ export class City {
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh = mesh; this.scene.add(mesh);
     this._mDirty = [Infinity, -1]; this._bDirty = [Infinity, -1];
+    // Reused flood-fill storage keeps repeated collapses allocation-free.
+    this._collapseMarks = new Uint32Array(n);
+    this._collapseStack = new Int32Array(n);
+    this._collapseStamp = 0;
 
     // block slabs (sidewalks / parks)
     const slab = new THREE.InstancedMesh(new THREE.BoxGeometry(BLOCK, 0.3, BLOCK),
@@ -442,14 +446,16 @@ export class City {
     const y0 = Math.max(0, Math.floor((c.y - r) / CH)), y1 = Math.min(GY - 1, Math.floor((c.y + r) / CH));
     const z0 = Math.max(0, Math.floor((c.z - r - OZ) / CH)), z1 = Math.min(GZ - 1, Math.floor((c.z + r - OZ) / CH));
     let n = 0; const rr = (r + CH * 0.5) ** 2;
-    for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+    outer: for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
       const i = this.grid[this.gi(x, y, z)]; if (i < 0) continue;
       const dx = OX + (x + 0.5) * CH - c.x, dy = (y + 0.5) * CH - c.y, dz = OZ + (z + 0.5) * CH - c.z;
       const d2 = dx * dx + dy * dy + dz * dz; if (d2 > rr) continue;
       const d = Math.sqrt(d2) + 0.01, k = power * (1.2 - Math.min(1, d / (r + CH)));
       this.removeChunk(i, dx / d * k, dy / d * k + k * 0.4, dz / d * k, n < 60 ? 2 : n < 160 ? 1 : 0);
-      if (++n >= maxN) return n;
+      if (++n >= maxN) break outer;
     }
+    this.destroyProps(c.x, c.y, c.z, r);
+    if (c.y - r < CH * 2) this.paintScorch(c.x, c.z, Math.max(2, r * 0.8), 0.55);
     return n;
   }
 
@@ -458,14 +464,18 @@ export class City {
     const x0 = Math.max(0, Math.floor((c.x - r - OX) / CH)), x1 = Math.min(GX - 1, Math.floor((c.x + r - OX) / CH));
     const y0 = Math.max(0, Math.floor((c.y - r) / CH)), y1 = Math.min(GY - 1, Math.floor((c.y + r) / CH));
     const z0 = Math.max(0, Math.floor((c.z - r - OZ) / CH)), z1 = Math.min(GZ - 1, Math.floor((c.z + r - OZ) / CH));
-    let hit = 0;
+    let hit = 0, broken = 0;
     for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
       const i = this.grid[this.gi(x, y, z)]; if (i < 0) continue;
       hit++;
       this.hp[i] -= dmg;
       const b = this.burnAttr.array;
       if (b[i] < 1) { b[i] = Math.min(1, b[i] + dmg * 0.012); this._markB(i); }
-      if (this.hp[i] <= 0) this.removeChunk(i, rnd(6), 4, rnd(6), 1);
+      if (this.hp[i] <= 0 && this.removeChunk(i, rnd(6), 4, rnd(6), 1)) broken++;
+    }
+    if (broken && c.y - r < 12) {
+      this.destroyProps(c.x, c.y, c.z, r);
+      this.paintScorch(c.x, c.z, Math.max(2, r * 0.65), 0.22);
     }
     return hit;
   }
@@ -495,35 +505,67 @@ export class City {
     return Infinity;
   }
 
-  // anything not connected to the ground through its own building falls
+  // Ground-connected chunks support a building; each disconnected island falls together.
   _collapse() {
-    const stack = [], seen = new Uint8Array(0);
+    const marks = this._collapseMarks, stack = this._collapseStack;
+    const neighbours = [1, -1, GX, -GX, GX * GZ, -GX * GZ];
     for (const b of this._dirtyB) {
       const B = this.buildings[b]; if (B.alive <= 0) continue;
-      const mark = new Set();
-      for (const i of B.cells) if (this.alive[i] && this.cy[i] === 0) { mark.add(i); stack.push(i); }
-      while (stack.length) {
-        const i = stack.pop(), x = this.cx[i], y = this.cy[i], z = this.cz[i];
-        const nb = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-        for (const [dx, dy, dz] of nb) {
-          const X = x + dx, Yy = y + dy, Z = z + dz;
-          if (X < 0 || Yy < 0 || Z < 0 || X >= GX || Yy >= GY || Z >= GZ) continue;
-          const j = this.grid[this.gi(X, Yy, Z)];
-          if (j >= 0 && this.cb[j] === b && !mark.has(j)) { mark.add(j); stack.push(j); }
+      if (++this._collapseStamp === 0xffffffff) { marks.fill(0); this._collapseStamp = 1; }
+      const grounded = this._collapseStamp;
+      let head = 0, tail = 0;
+      for (const i of B.cells) if (this.alive[i] && this.cy[i] === 0) { marks[i] = grounded; stack[tail++] = i; }
+      while (head < tail) {
+        const i = stack[head++], x = this.cx[i], y = this.cy[i], z = this.cz[i];
+        const base = this.gi(x, y, z);
+        for (let k = 0; k < 6; k++) {
+          if ((k === 0 && x === GX - 1) || (k === 1 && x === 0) ||
+              (k === 2 && z === GZ - 1) || (k === 3 && z === 0) ||
+              (k === 4 && y === GY - 1) || (k === 5 && y === 0)) continue;
+          const j = this.grid[base + neighbours[k]];
+          if (j >= 0 && this.cb[j] === b && marks[j] !== grounded) { marks[j] = grounded; stack[tail++] = j; }
         }
       }
       let falling = 0;
       for (const i of B.cells) {
-        if (!this.alive[i] || mark.has(i)) continue;
-        // detach and drop as one big piece, slight random drift so the mass crumbles as it falls
-        const x = OX + (this.cx[i] + 0.5) * CH, y = (this.cy[i] + 0.5) * CH, z = OZ + (this.cz[i] + 0.5) * CH;
-        this.alive[i] = 0; this.grid[this.gi(this.cx[i], this.cy[i], this.cz[i])] = -1;
-        this.mesh.setMatrixAt(i, ZERO); this._markM(i); B.alive--; this.score++;
-        const col = B.color, burnt = 1 - 0.8 * this.burnAttr.array[i];
-        this.spawnDebris(x, y, z, rnd(1.5), -1 - Math.random() * 2, rnd(1.5), CH * 0.97, col[0] * burnt, col[1] * burnt, col[2] * burnt, true);
-        falling++;
+        if (!this.alive[i] || marks[i] === grounded) continue;
+        // Collect a whole island before removing it, so neighbouring pieces share momentum.
+        if (++this._collapseStamp === 0xffffffff) { marks.fill(0); this._collapseStamp = 1; }
+        const island = this._collapseStamp;
+        head = 0; tail = 1; stack[0] = i; marks[i] = island;
+        let sumX = 0, sumZ = 0, minY = GY;
+        while (head < tail) {
+          const q = stack[head++], x = this.cx[q], y = this.cy[q], z = this.cz[q];
+          sumX += x; sumZ += z; if (y < minY) minY = y;
+          const base = this.gi(x, y, z);
+          for (let k = 0; k < 6; k++) {
+            if ((k === 0 && x === GX - 1) || (k === 1 && x === 0) ||
+                (k === 2 && z === GZ - 1) || (k === 3 && z === 0) ||
+                (k === 4 && y === GY - 1) || (k === 5 && y === 0)) continue;
+            const j = this.grid[base + neighbours[k]];
+            if (j >= 0 && this.cb[j] === b && marks[j] !== island && marks[j] !== grounded) { marks[j] = island; stack[tail++] = j; }
+          }
+        }
+        const midX = sumX / tail, midZ = sumZ / tail;
+        const driftX = rnd(1.2), driftZ = rnd(1.2), tiltX = rnd(0.018), tiltZ = rnd(0.018), spin = rnd(0.025);
+        for (let q = 0; q < tail; q++) {
+          const j = stack[q], x = OX + (this.cx[j] + 0.5) * CH, y = (this.cy[j] + 0.5) * CH, z = OZ + (this.cz[j] + 0.5) * CH;
+          this.alive[j] = 0; this.grid[this.gi(this.cx[j], this.cy[j], this.cz[j])] = -1;
+          this.mesh.setMatrixAt(j, ZERO); this._markM(j); B.alive--; this.score++;
+          const col = B.color, burnt = 1 - 0.8 * this.burnAttr.array[j];
+          this.spawnDebris(x, y, z, driftX + ((this.cy[j] - minY) * tiltX - (this.cz[j] - midZ) * spin) * CH, -2,
+            driftZ + ((this.cy[j] - minY) * tiltZ + (this.cx[j] - midX) * spin) * CH, CH * 0.97,
+            col[0] * burnt, col[1] * burnt, col[2] * burnt, true);
+        }
+        falling += tail;
       }
-      if (falling > 6) this.onCollapse && this.onCollapse(falling, B);
+      if (falling > 6) {
+        const L = B.lot, x = L.x + L.w * 0.5, z = L.z + L.d * 0.5;
+        this.destroyProps(x, 2, z, Math.max(L.w, L.d) * 0.55);
+        this.paintScorch(x, z, Math.max(L.w, L.d) * 0.45, 0.35);
+        this.fx && this.fx.dust(_v.set(x, Math.max(3, B.top * CH * 0.3), z), Math.min(8, falling / 30), 1);
+        this.onCollapse && this.onCollapse(falling, B);
+      }
     }
     this._dirtyB.clear();
   }
@@ -550,7 +592,7 @@ export class City {
     this.dV[i * 3] = vx; this.dV[i * 3 + 1] = vy; this.dV[i * 3 + 2] = vz;
     const q = _q.setFromEuler(_e.set(heavy ? rnd(0.04) : Math.random() * 6, heavy ? rnd(0.04) : Math.random() * 6, heavy ? rnd(0.04) : Math.random() * 6));
     this.dQ[i * 4] = q.x; this.dQ[i * 4 + 1] = q.y; this.dQ[i * 4 + 2] = q.z; this.dQ[i * 4 + 3] = q.w;
-    const w = heavy ? 0.5 : 8;
+    const w = heavy ? 0.08 : 8;
     this.dW[i * 3] = rnd(w); this.dW[i * 3 + 1] = rnd(w); this.dW[i * 3 + 2] = rnd(w);
     this.dS[i] = s; this.dL[i] = 0; this.dState[i] = 1; this.dHeavy[i] = heavy ? 1 : 0;
     this.dMesh.setColorAt(i, _c.setRGB(r, g, b, THREE.SRGBColorSpace)); this.dMesh.instanceColor.needsUpdate = true;
@@ -558,30 +600,48 @@ export class City {
   _updateDebris(dt) {
     const P = this.dP, V = this.dV, Q = this.dQ, W = this.dW, S = this.dS, L = this.dL, st = this.dState, mesh = this.dMesh;
     const arr = mesh.instanceMatrix.array;
-    let landedHeavy = 0;
+    let landedHeavy = 0, impacts = 0, firstDirty = Infinity, lastDirty = -1;
     for (let i = 0; i < this.dHigh; i++) {
       if (!st[i]) continue;
       L[i] += dt;
+      if (st[i] === 2 && L[i] <= 40) continue; // settled rubble needs no matrix upload
       let s = S[i];
       if (st[i] === 1) {
+        const p = i * 3, oldBottom = P[p + 1] - s * 0.5;
         V[i * 3 + 1] -= 24 * dt;
-        const dr = 1 - 0.15 * dt; V[i * 3] *= dr; V[i * 3 + 2] *= dr;
-        P[i * 3] += V[i * 3] * dt; P[i * 3 + 1] += V[i * 3 + 1] * dt; P[i * 3 + 2] += V[i * 3 + 2] * dt;
-        // falling heavy pieces crush what is below them: progressive collapse into neighbours
-        if (this.dHeavy[i] && V[i * 3 + 1] < -14) {
-          const j = this.chunkAt(P[i * 3], P[i * 3 + 1] - s * 0.6, P[i * 3 + 2]);
-          if (j >= 0 && Math.random() < 0.5) { this.removeChunk(j, V[i * 3] * 0.3, -4, V[i * 3 + 2] * 0.3, 1); V[i * 3 + 1] *= 0.55; }
+        const dr = Math.max(0, 1 - 0.15 * dt); V[p] *= dr; V[p + 2] *= dr;
+        P[p] += V[p] * dt; P[p + 1] += V[p + 1] * dt; P[p + 2] += V[p + 2] * dt;
+        // Sweep the bottom through occupied voxel levels so a fast fragment cannot skip a roof.
+        // Only the centre column is sampled; this keeps thousands of fragments inexpensive.
+        let support = 0, bottom = P[p + 1] - s * 0.5;
+        if (V[p + 1] < 0 && oldBottom >= 0) {
+          const x = Math.floor((P[p] - OX) / CH), z = Math.floor((P[p + 2] - OZ) / CH);
+          if (x >= 0 && x < GX && z >= 0 && z < GZ) {
+            for (let y = Math.min(GY - 1, Math.floor(oldBottom / CH)); y >= Math.max(0, Math.floor(bottom / CH)); y--) {
+              const top = (y + 1) * CH;
+              if (oldBottom < top || bottom > top) continue;
+              const j = this.grid[this.gi(x, y, z)];
+              if (j < 0) continue;
+              if (this.dHeavy[i] && V[p + 1] < -14 && impacts < 32 &&
+                  this.removeChunk(j, V[p] * 0.3, -4, V[p + 2] * 0.3, 1)) {
+                impacts++; V[p + 1] *= 0.55;
+                continue;
+              }
+              support = top;
+              break;
+            }
+          }
         }
         // integrate rotation
         const wx = W[i * 3], wy = W[i * 3 + 1], wz = W[i * 3 + 2];
         _q.set(Q[i * 4], Q[i * 4 + 1], Q[i * 4 + 2], Q[i * 4 + 3]);
         _q2.set(wx * dt * 0.5, wy * dt * 0.5, wz * dt * 0.5, 1).multiply(_q).normalize();
         Q[i * 4] = _q2.x; Q[i * 4 + 1] = _q2.y; Q[i * 4 + 2] = _q2.z; Q[i * 4 + 3] = _q2.w;
-        const floor = s * 0.42;
-        if (P[i * 3 + 1] < floor) {
-          P[i * 3 + 1] = floor;
+        const floor = support + s * 0.5;
+        if (P[p + 1] < floor) {
+          P[p + 1] = floor;
           if (V[i * 3 + 1] < -6) {
-            if (this.dHeavy[i] && V[i * 3 + 1] < -20) landedHeavy++;
+            if (support === 0 && this.dHeavy[i] && V[i * 3 + 1] < -20) landedHeavy++;
             V[i * 3 + 1] *= -0.25; V[i * 3] *= 0.6; V[i * 3 + 2] *= 0.6; W[i * 3] *= 0.5; W[i * 3 + 1] *= 0.5; W[i * 3 + 2] *= 0.5;
           } else { st[i] = 2; L[i] = 0; }
         }
@@ -594,6 +654,8 @@ export class City {
       const x = Q[i * 4], y = Q[i * 4 + 1], z = Q[i * 4 + 2], w = Q[i * 4 + 3];
       const x2 = x + x, y2 = y + y, z2 = z + z, xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2;
       const o = i * 16;
+      if (i < firstDirty) firstDirty = i;
+      if (i > lastDirty) lastDirty = i;
       if (!st[i]) { for (let k = 0; k < 16; k++) arr[o + k] = 0; continue; }
       arr[o] = (1 - (yy + zz)) * s; arr[o + 1] = (xy + wz) * s; arr[o + 2] = (xz - wy) * s; arr[o + 3] = 0;
       arr[o + 4] = (xy - wz) * s; arr[o + 5] = (1 - (xx + zz)) * s; arr[o + 6] = (yz + wx) * s; arr[o + 7] = 0;
@@ -601,7 +663,11 @@ export class City {
       arr[o + 12] = P[i * 3]; arr[o + 13] = P[i * 3 + 1]; arr[o + 14] = P[i * 3 + 2]; arr[o + 15] = 1;
     }
     mesh.count = this.dHigh;
-    mesh.instanceMatrix.needsUpdate = true;
+    if (lastDirty >= 0) {
+      mesh.instanceMatrix.clearUpdateRanges();
+      mesh.instanceMatrix.addUpdateRange(firstDirty * 16, (lastDirty - firstDirty + 1) * 16);
+      mesh.instanceMatrix.needsUpdate = true;
+    }
     if (landedHeavy > 0) this.onHeavyLand && this.onHeavyLand(landedHeavy);
   }
 

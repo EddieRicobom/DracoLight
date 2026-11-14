@@ -21,7 +21,7 @@ void main(){
   vec2 p = gl_PointCoord * 2. - 1.;
   float r = length(p); if (r > 1.) discard;
   float a = pow(1. - r, 1.6);
-  gl_FragColor = vec4(vCol.rgb * a * vCol.a, 1.0);
+  gl_FragColor = vec4(vCol.rgb * a * vCol.a * 0.1, 1.0);
 }`;
 const FS_SMOKE = /* glsl */`
 varying vec4 vCol; varying float vSeed;
@@ -98,7 +98,7 @@ export class FX {
   light(pos, color, intensity, dur, dist = 140) {
     let best = this.lights[0];
     for (const L of this.lights) if (L.l.intensity < best.l.intensity) best = L;
-    best.l.position.copy(pos); best.l.color.set(color); best.l.distance = dist; best.i0 = intensity; best.t = 0; best.dur = dur; best.l.intensity = intensity;
+    best.l.position.copy(pos); best.l.color.set(color); best.l.distance = dist; best.i0 = intensity * 0.008; best.t = 0; best.dur = dur; best.l.intensity = best.i0;
     return best;
   }
 
