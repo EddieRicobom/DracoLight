@@ -119,16 +119,42 @@ export function createSky(scene) {
       ambient.groundColor.copy(ambientGroundColor).lerp(highAmbientGround, altitude);
       ambient.intensity = THREE.MathUtils.lerp(ambientIntensity, 1.2, altitude);
     }
+    sky.refreshEnvironment?.(altitude);
     return altitude;
   };
   return sky;
 }
 
 export function createVisualPipeline(renderer, scene, camera) {
+  // Capture only the procedural sky. A small prefiltered map gives the city's
+  // glass and metal coherent outdoor reflections without screen-space passes.
+  const sky = scene.children.find((child) => child.updateAltitude);
+  if (sky) {
+    const environmentScene = new THREE.Scene();
+    const environmentSky = new THREE.Mesh(sky.geometry, sky.material);
+    environmentSky.frustumCulled = false;
+    environmentScene.add(environmentSky);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    let environmentTarget;
+    let environmentStep = -1;
+    sky.refreshEnvironment = (altitude) => {
+      // Altitude changes continuously; rebuilding a cubemap every frame would
+      // be prohibitively expensive. Five atmosphere bands suffice for highlights.
+      const step = Math.min(4, Math.floor(altitude * 4));
+      if (step === environmentStep) return;
+      environmentStep = step;
+      const nextTarget = pmrem.fromScene(environmentScene, 0, 0.1, 1500, { size: 64 });
+      scene.environment = nextTarget.texture;
+      scene.environmentIntensity = 0.72;
+      environmentTarget?.dispose();
+      environmentTarget = nextTarget;
+    };
+    sky.refreshEnvironment(0);
+  }
   const composer = new EffectComposer(renderer);
   // Bloom works in linear HDR, before the final tone and color-space conversion.
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.16, 0.35, 1.45));
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.3, 1.35));
   const grade = new ShaderPass({
     uniforms: { tDiffuse: { value: null } },
     vertexShader: `varying vec2 vUv;

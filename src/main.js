@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GameAudio } from './audio.js';
 import { Pokemon } from './pokemon.js';
 import { City, HALF } from './city.js';
+import { createUrbanDetails } from './urban.js';
 import { FX, Beam, Projectiles } from './fx.js';
 import { clamp, damp, turnToward, U } from './util.js';
 import { createSky, createVisualPipeline } from './visual.js';
@@ -50,6 +51,7 @@ const composer = createVisualPipeline(renderer, scene, camera);
 
 const fx = new FX(scene, camera);
 const city = new City(scene, fx);
+const urban = createUrbanDetails(scene, city);
 const player = new Pokemon(scene, 'rayquaza');
 const hunter = new Pokemon(scene, 'deoxys');
 const beam = new Beam(scene);
@@ -354,7 +356,7 @@ function frame(now) {
     updatePlayer(dt);
     if (state === 'playing') updateHunter(dt);
     if (state === 'playing') updateProjectiles(dt);
-    city.update(dt); fx.update(dt, city); updateCamera(dt); updateHud(dt);
+    city.update(dt); urban.update(dt); fx.update(dt, city); updateCamera(dt); updateHud(dt);
   } else if (state === 'menu') {
     camera.position.set(0, 150, 205); camera.lookAt(0, 100, -30);
     sky.position.copy(camera.position);
