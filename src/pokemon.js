@@ -85,8 +85,10 @@ export class Pokemon {
           const correction = new THREE.Quaternion().setFromUnitVectors(axis, forwardAxis);
           const oriented = new THREE.Group();
           this.root.remove(normalized);
-          // Correct the model's roll after aligning head-to-tail with flight.
-          oriented.quaternion.setFromAxisAngle(forwardAxis, Math.PI).multiply(correction);
+          // Turn the model around the upright axis so its head leads the flight.
+          oriented.quaternion.setFromAxisAngle(yAxis, Math.PI)
+            .multiply(new THREE.Quaternion().setFromAxisAngle(forwardAxis, Math.PI))
+            .multiply(correction);
           oriented.add(normalized);
           this.root.add(oriented);
           this.oriented = oriented;
