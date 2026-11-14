@@ -31,7 +31,7 @@ function buildingMaterial() {
       .replace('#include <common>', `#include <common>
         uniform float uTime;
         varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn;
-        float wLit; float wWin; float wGlass;
+        float wLit; float wWin; float wGlass; float wFrame;
         ${GLSL_COMMON}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
@@ -52,22 +52,40 @@ function buildingMaterial() {
           float win = wx * wy * (1. - roof) * (1. - bot);
           float h = hash12(id + seed * 37.1 + N.xz * 13.7);
           float lit = step(shop ? 0.25 : 0.6, h) * win;
-          // facade grime and vertical streaks
-          float grime = 0.85 + 0.25 * vnoise(fc * vec2(0.6, 0.08) + seed * 9.) - 0.12 * smoothstep(8., 0., vWP.y);
+          // World-space pattern stays aligned when individual facade chunks are removed.
+          float grime = 0.83 + 0.19 * vnoise(fc * vec2(0.31, 0.11) + seed * 9.)
+            + 0.06 * vnoise(fc * vec2(1.7, 0.27) + seed * 23.);
+          grime -= 0.11 * (1. - smoothstep(0., 12., vWP.y));
           vec3 base = diffuseColor.rgb * grime;
-          vec3 glass = mix(vec3(0.07, 0.1, 0.13), vec3(0.18, 0.24, 0.3), glassT) * (0.8 + 0.4 * hash12(id * 1.7 + seed));
+          float joint = 1. - smoothstep(.012, .025, min(f.x, 1. - f.x));
+          joint = max(joint, 1. - smoothstep(.012, .025, min(f.y, 1. - f.y)));
+          float brickCourse = 1. - smoothstep(.015, .045, fract(fc.y / .38));
+          float brickBond = 1. - smoothstep(.012, .035, fract(fc.x / .82 + mod(floor(fc.y / .38), 2.) * .5));
+          base *= 1. - brick * (0.2 * brickCourse + 0.12 * brickBond);
+          base *= 1. - office * joint * .17;
+          float reflected = .55 + .35 * vnoise(fc * vec2(.09, .22) + seed * 17.)
+            + .13 * hash12(id + seed * 4.);
+          vec3 glass = mix(vec3(.035, .052, .073), vec3(.12, .19, .25), glassT) * reflected;
+          glass += vec3(.055, .075, .09) * pow(1. - abs(dot(N, normalize(vWP - vec3(0., 120., 0.)))), 2.);
           base = mix(base, glass, win);
-          vec3 roofC = vec3(0.2, 0.2, 0.21) * (0.75 + 0.5 * vnoise(vWP.xz * 0.3));
+          // Narrow dark mullions and horizontal floor bands define the window scale.
+          float mullion = win * (1. - smoothstep(.018, .045, abs(fract(f.x * 2.) - .5)));
+          float sill = (1. - roof) * (1. - bot) * (1. - smoothstep(.015, .055, abs(f.y - hi.y)));
+          float frame = max(mullion, sill * .8);
+          base = mix(base, glassT > .5 ? vec3(.085, .1, .115) : vec3(.18, .19, .2), frame * .82);
+          float roofGrain = .75 + .35 * vnoise(vWP.xz * .28);
+          float roofSeam = 1. - smoothstep(.012, .045, fract(vWP.x / 5.));
+          vec3 roofC = vec3(.19, .195, .2) * roofGrain * (1. - .12 * roofSeam);
           base = mix(base, roofC, roof);
           float burn = vBurn;
           base *= 1. - 0.88 * smoothstep(0., 1., burn) * (0.75 + 0.25 * vnoise(vWP.xy * 0.9 + vWP.zz));
           diffuseColor.rgb = base;
-          wLit = lit * (1. - step(0.25, burn)); wWin = win; wGlass = glassT;
+          wLit = lit * (1. - step(0.25, burn)); wWin = win; wGlass = glassT; wFrame = frame;
         }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = mix(roughnessFactor, mix(0.18, 0.05, wGlass), wWin * (1. - wLit));`)
+        roughnessFactor = mix(roughnessFactor, mix(0.3, 0.13, wGlass), wWin * (1. - wFrame));`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
-        metalnessFactor = mix(metalnessFactor, mix(0.2, 0.7, wGlass), wWin * (1. - wLit));`)
+        metalnessFactor = mix(metalnessFactor, mix(0.08, 0.25, wGlass), wWin * (1. - wFrame));`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         normal = bumpN(-vViewPosition, normal, vec2(dFdx(wWin), dFdy(wWin)) * 0.35, faceDirection);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
@@ -85,7 +103,7 @@ function buildingMaterial() {
 
 // scorch decals painted on the ground in a 1024² canvas covering the whole city
 const scorch = { canvas: null, ctx: null, tex: null, dirty: false, t: 0 };
-function scorchPatch(m) {
+function scorchPatch(m, paving = false) {
   m.onBeforeCompile = (s) => {
     s.uniforms.uScorch = { value: scorch.tex };
     s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vSW;')
@@ -99,7 +117,12 @@ function scorchPatch(m) {
       .replace('#include <color_fragment>', `#include <color_fragment>
         { vec2 su = (vSW + ${HALF.toFixed(1)}) / ${(2 * HALF).toFixed(1)};
           float sc = (su.x > 0. && su.x < 1. && su.y > 0. && su.y < 1.) ? texture2D(uScorch, vec2(su.x, 1. - su.y)).r : 0.;
-          diffuseColor.rgb *= (1. - 0.85 * sc) * (0.92 + 0.16 * vnoise(vSW * 0.35)); }`);
+          float grain = .91 + .13 * vnoise(vSW * 1.2) + .06 * vnoise(vSW * 4.);
+          ${paving ? `vec2 tile = fract(vSW / 2.5);
+          float mortar = 1. - smoothstep(.025, .07, min(min(tile.x, tile.y), min(1. - tile.x, 1. - tile.y)));
+          grain *= 1. - .15 * mortar;
+          grain *= .94 + .12 * hash12(floor(vSW / 2.5));` : ''}
+          diffuseColor.rgb *= (1. - 0.85 * sc) * grain; }`);
   };
   return m;
 }
@@ -144,9 +167,21 @@ export class City {
     // road surface with markings (canvas)
     const S = 2048, c = document.createElement('canvas'); c.width = c.height = S;
     const g = c.getContext('2d'), k = S / (2 * HALF), R = rng(7);
-    g.fillStyle = '#3a3a3c'; g.fillRect(0, 0, S, S);
+    g.fillStyle = '#383a3c'; g.fillRect(0, 0, S, S);
     for (let i = 0; i < 26000; i++) { const v = 40 + R() * 30 | 0; g.fillStyle = `rgba(${v},${v},${v + 2},0.35)`; g.fillRect(R() * S, R() * S, 2 + R() * 3, 2 + R() * 3); }
     for (let i = 0; i < 260; i++) { g.fillStyle = 'rgba(20,20,22,0.25)'; g.beginPath(); g.ellipse(R() * S, R() * S, 4 + R() * 14, 3 + R() * 8, R() * 3, 0, 7); g.fill(); }
+    // Asphalt repair patches and fine transverse seams break up the flat road plane.
+    for (let i = 0; i < 410; i++) {
+      const x = R() * S, y = R() * S, w = (2 + R() * 11) * k, h = (1 + R() * 4) * k;
+      g.fillStyle = R() < .5 ? 'rgba(19,22,24,0.14)' : 'rgba(105,104,100,0.11)';
+      g.fillRect(x, y, w, h);
+      g.strokeStyle = 'rgba(14,15,16,0.12)'; g.lineWidth = .6; g.strokeRect(x, y, w, h);
+    }
+    g.strokeStyle = 'rgba(17,19,20,0.16)'; g.lineWidth = .7;
+    for (let i = 0; i < 460; i++) {
+      const x = R() * S, y = R() * S;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + (R() - .5) * 9 * k, y + (R() - .5) * 9 * k); g.stroke();
+    }
     g.lineWidth = 1.3; g.strokeStyle = 'rgba(235,225,200,0.75)'; g.setLineDash([3 * k, 3 * k]);
     for (let i = 0; i <= NB; i++) {
       const p = (i * PITCH) * k;
@@ -287,7 +322,7 @@ export class City {
 
     // block slabs (sidewalks / parks)
     const slab = new THREE.InstancedMesh(new THREE.BoxGeometry(BLOCK, 0.3, BLOCK),
-      scorchPatch(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 })), this.blocks.length);
+      scorchPatch(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.94 }), true), this.blocks.length);
     this.blocks.forEach((B, i) => {
       m.makeTranslation(B.x0 + BLOCK / 2, 0.15, B.z0 + BLOCK / 2); slab.setMatrixAt(i, m);
       slab.setColorAt(i, B.park ? c.setRGB(0.16, 0.24, 0.1, THREE.SRGBColorSpace) : c.setRGB(0.52, 0.5, 0.48, THREE.SRGBColorSpace));

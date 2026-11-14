@@ -16,7 +16,7 @@ const smooth = (x) => { const t = THREE.MathUtils.clamp(x, 0, 1); return t * t *
 // updateAltitude is attached to the mesh to preserve the createSky(scene) API.
 export function createSky(scene) {
   const uniforms = { uAltitude: { value: 0 }, uTime: { value: 0 } };
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(1200, 48, 24), new THREE.ShaderMaterial({
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(1200, 32, 16), new THREE.ShaderMaterial({
     uniforms,
     side: THREE.BackSide,
     depthWrite: false,
@@ -48,14 +48,16 @@ export function createSky(scene) {
         vec3 sunDir = normalize(vec3(-180.0, 260.0, 130.0));
         float sun = max(dot(dir, sunDir), 0.0);
 
-        vec3 city = mix(vec3(0.59, 0.29, 0.19), vec3(0.22, 0.19, 0.25), smoothstep(0.0, 0.42, h));
-        city = mix(city, vec3(0.055, 0.075, 0.145), smoothstep(0.38, 0.9, h));
-        city = mix(vec3(0.13, 0.105, 0.13), city, smoothstep(-0.28, 0.02, h));
+        vec3 city = mix(vec3(0.48, 0.31, 0.27), vec3(0.22, 0.27, 0.38), smoothstep(-0.02, 0.42, h));
+        city = mix(city, vec3(0.065, 0.12, 0.25), smoothstep(0.36, 0.94, h));
+        city = mix(vec3(0.17, 0.16, 0.19), city, smoothstep(-0.28, 0.015, h));
+        float haze = exp(-pow(max(h, 0.0) / 0.16, 2.0));
+        city += vec3(0.18, 0.105, 0.065) * haze * pow(sun, 3.0);
 
         float horizon = mix(0.0, -0.14, a);
         float rim = exp(-pow((h - horizon) / mix(0.25, 0.075, a), 2.0));
         vec3 upper = mix(vec3(0.007, 0.022, 0.075), vec3(0.002, 0.006, 0.019), smoothstep(0.0, 0.85, h));
-        upper += vec3(0.13, 0.31, 0.56) * rim * (0.65 + 0.35 * sun);
+        upper += vec3(0.11, 0.25, 0.43) * rim * (0.65 + 0.35 * sun);
         upper += vec3(0.23, 0.46, 0.66) * exp(-max(h - horizon, 0.0) * 11.0) * 0.18;
         vec3 color = mix(city, upper, a);
 
@@ -75,10 +77,10 @@ export function createSky(scene) {
         star *= smoothstep(0.05, 0.3, h) * smoothstep(0.38, 0.9, a);
         color += vec3(0.58, 0.72, 1.0) * star;
 
-        color += mix(vec3(1.0, 0.37, 0.13), vec3(0.55, 0.7, 1.0), a)
-                 * pow(sun, 12.0) * mix(0.16, 0.07, a);
-        color += vec3(1.0, 0.67, 0.37) * pow(sun, 160.0) * 0.65;
-        color += vec3(1.0, 0.9, 0.72) * smoothstep(0.99985, 0.99994, sun) * 0.8;
+        color += mix(vec3(1.0, 0.48, 0.25), vec3(0.52, 0.68, 0.92), a)
+                 * pow(sun, 12.0) * mix(0.13, 0.055, a);
+        color += vec3(1.0, 0.7, 0.43) * pow(sun, 160.0) * 0.42;
+        color += vec3(1.0, 0.91, 0.76) * smoothstep(0.99985, 0.99994, sun) * 0.75;
         gl_FragColor = vec4(color, 1.0);
       }`,
   }));
@@ -90,6 +92,16 @@ export function createSky(scene) {
   const baseFogDensity = fog?.density ?? 0;
   const baseFogColor = fog?.color.clone();
   const highFogColor = new THREE.Color(0x193755);
+  const sunlight = scene.children.find((child) => child.isDirectionalLight && child.castShadow);
+  const ambient = scene.children.find((child) => child.isHemisphereLight);
+  const sunColor = sunlight?.color.clone();
+  const sunIntensity = sunlight?.intensity;
+  const ambientSkyColor = ambient?.color.clone();
+  const ambientGroundColor = ambient?.groundColor.clone();
+  const ambientIntensity = ambient?.intensity;
+  const highSunColor = new THREE.Color(0xffe2c5);
+  const highAmbientSky = new THREE.Color(0x8caed7);
+  const highAmbientGround = new THREE.Color(0x303f5b);
   sky.updateAltitude = (height, timeSeconds = 0) => {
     const altitude = smooth((Math.max(0, height) - SKY_CITY_TOP) / (SKY_STRATOSPHERE - SKY_CITY_TOP));
     uniforms.uAltitude.value = altitude;
@@ -97,6 +109,15 @@ export function createSky(scene) {
     if (fog) {
       fog.density = THREE.MathUtils.lerp(baseFogDensity, 0.00008, altitude);
       fog.color.copy(baseFogColor).lerp(highFogColor, altitude);
+    }
+    if (sunlight) {
+      sunlight.color.copy(sunColor).lerp(highSunColor, altitude);
+      sunlight.intensity = THREE.MathUtils.lerp(sunIntensity, 2.8, altitude);
+    }
+    if (ambient) {
+      ambient.color.copy(ambientSkyColor).lerp(highAmbientSky, altitude);
+      ambient.groundColor.copy(ambientGroundColor).lerp(highAmbientGround, altitude);
+      ambient.intensity = THREE.MathUtils.lerp(ambientIntensity, 1.2, altitude);
     }
     return altitude;
   };
@@ -107,7 +128,7 @@ export function createVisualPipeline(renderer, scene, camera) {
   const composer = new EffectComposer(renderer);
   // Bloom works in linear HDR, before the final tone and color-space conversion.
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.45, 1.35));
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.16, 0.35, 1.45));
   const grade = new ShaderPass({
     uniforms: { tDiffuse: { value: null } },
     vertexShader: `varying vec2 vUv;
@@ -117,9 +138,10 @@ export function createVisualPipeline(renderer, scene, camera) {
       void main() {
         vec3 color = texture2D(tDiffuse, vUv).rgb;
         float light = clamp(dot(color, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
-        color *= mix(vec3(0.91, 1.0, 1.07), vec3(1.06, 1.0, 0.95), smoothstep(0.12, 0.9, light));
+        color *= mix(vec3(0.94, 0.99, 1.04), vec3(1.04, 1.0, 0.97), smoothstep(0.12, 0.9, light));
+        color = max(vec3(0.0), (color - 0.018) * 1.025 + 0.018);
         vec2 p = vUv * 2.0 - 1.0;
-        color *= 1.0 - 0.14 * smoothstep(0.2, 1.7, dot(p, p));
+        color *= 1.0 - 0.09 * smoothstep(0.2, 1.7, dot(p, p));
         gl_FragColor = vec4(color, 1.0);
       }`,
   });

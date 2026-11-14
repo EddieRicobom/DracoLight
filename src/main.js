@@ -21,7 +21,9 @@ scene.background = new THREE.Color(0x34202a);
 scene.fog = new THREE.FogExp2(0x8d554b, 0.0017);
 const camera = new THREE.PerspectiveCamera(70, 1, 1, 26000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+const maxPixelRatio = Math.min(devicePixelRatio || 1, 1.25);
+let renderPixelRatio = maxPixelRatio;
+renderer.setPixelRatio(renderPixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.2;
@@ -78,6 +80,7 @@ const altitudeSpeed = (height) => 1 + 2.2 * clamp((height - 150) / 1850, 0, 1);
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
+  composer.setPixelRatio(renderPixelRatio);
   composer.setSize(w, h);
   camera.aspect = w / h; camera.updateProjectionMatrix();
   fx.setScale(h * renderer.getPixelRatio(), camera.fov);
@@ -316,10 +319,34 @@ function updateHud(dt) {
   if (fpsTime > 0.5) { $('fps').textContent = `${Math.round(frames / fpsTime)} FPS`; fpsTime = 0; frames = 0; }
 }
 
+// Adapt resolution slowly to sustained load, without reacting to background tabs.
+let qualityElapsed = 0, qualityFrames = 0, stableWindows = 0;
+function adaptResolution(rawDt) {
+  if (document.hidden || state !== 'playing' || rawDt > 0.5) {
+    qualityElapsed = 0; qualityFrames = 0; stableWindows = 0;
+    return;
+  }
+  qualityElapsed += rawDt; qualityFrames++;
+  if (qualityElapsed < 3) return;
+  const fps = qualityFrames / qualityElapsed;
+  qualityElapsed = 0; qualityFrames = 0;
+  let next = renderPixelRatio;
+  if (fps < 35) { next = Math.max(0.65, renderPixelRatio - 0.15); stableWindows = 0; }
+  else if (fps > 55 && ++stableWindows >= 3) { next = Math.min(maxPixelRatio, renderPixelRatio + 0.1); stableWindows = 0; }
+  else if (fps <= 55) stableWindows = 0;
+  if (Math.abs(next - renderPixelRatio) > 0.01) {
+    renderPixelRatio = next;
+    renderer.setPixelRatio(renderPixelRatio);
+    resize();
+  }
+}
+
 let previous = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - previous) / 1000); previous = now;
+  const rawDt = (now - previous) / 1000; previous = now;
+  const dt = Math.min(0.05, rawDt);
+  adaptResolution(rawDt);
   if (state === 'playing') {
     elapsed += dt; U.uTime.value = elapsed;
     playerInvuln = Math.max(0, playerInvuln - dt);
