@@ -1,6 +1,6 @@
 # DracoLight
 
-Um jogo de combate aéreo em uma cidade destrutível. Controle Rayquaza, enfrente Deoxys e use os prédios como cobertura.
+Um jogo de combate aéreo em uma cidade destrutível. Controle Rayquaza, persiga Deoxys enquanto ele foge pela cidade.
 
 **[Jogar DracoLight](https://eddiericobom.github.io/DracoLight/)**
 

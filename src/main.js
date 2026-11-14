@@ -91,10 +91,10 @@ function end(win) {
   mouse.left = false; beam.hide(); beam.charge(hunter.mouth, 0);
   document.exitPointerLock?.();
   menu.classList.remove('off'); hud.classList.remove('on');
-  $('sub').textContent = win ? 'Vitória · Deoxys caiu' : 'Derrota · Deoxys venceu';
+  $('sub').textContent = win ? 'Vitória · Deoxys caiu' : 'Derrota · Rayquaza caiu';
   $('msg').textContent = win
     ? `Deoxys foi derrotado. Você destruiu ${city.score} blocos da cidade.`
-    : `Deoxys te derrubou. Você destruiu ${city.score} blocos da cidade. Tente outra vez.`;
+    : `Rayquaza caiu durante a perseguição. Você destruiu ${city.score} blocos da cidade. Tente outra vez.`;
   go.textContent = 'Jogar novamente';
 }
 
@@ -261,64 +261,26 @@ function updatePlayer(dt) {
 
 function updateHunter(dt) {
   if (enemyHp <= 0) return;
-  const toPlayer = tmp.subVectors(player.pos, hunter.pos);
-  const range = toPlayer.length();
-  const orbit = tmp2.crossVectors(toPlayer, THREE.Object3D.DEFAULT_UP).normalize();
-  desired.copy(toPlayer).normalize();
-  if (range < 95) {
-    desired.addScaledVector(orbit, 0.75);
-    if (range < 55) desired.addScaledVector(toPlayer, -0.025);
-  } else desired.addScaledVector(orbit, 0.14);
-  const bound = flightBoundary(Math.max(hunter.pos.y, player.pos.y));
-  if (hunter.pos.x > bound - 25 || hunter.pos.x < -bound + 25 || hunter.pos.z > bound - 25 || hunter.pos.z < -bound + 25) {
-    desired.x -= hunter.pos.x * 0.005;
-    desired.z -= hunter.pos.z * 0.005;
-  }
-  desired.y += Math.sin(elapsed * 0.7) * 0.12;
+  // Flee the player, with a gentle sideways weave and a turn away from the arena edge.
+  const away = tmp.subVectors(hunter.pos, player.pos);
+  if (away.lengthSq() < 0.001) away.copy(hunter.fwd);
+  away.normalize();
+  const lateral = tmp2.crossVectors(away, THREE.Object3D.DEFAULT_UP).normalize();
+  desired.copy(away).addScaledVector(lateral, Math.sin(elapsed * 0.7) * 0.35);
+  const bound = flightBoundary(hunter.pos.y);
+  const edge = bound * 0.75;
+  if (Math.abs(hunter.pos.x) > edge) desired.x -= Math.sign(hunter.pos.x) * (Math.abs(hunter.pos.x) - edge) / (bound - edge) * 3;
+  if (Math.abs(hunter.pos.z) > edge) desired.z -= Math.sign(hunter.pos.z) * (Math.abs(hunter.pos.z) - edge) / (bound - edge) * 3;
+  if (hunter.pos.y < 50) desired.y += 0.6;
+  if (hunter.pos.y > MAX_ALTITUDE - 150) desired.y -= 0.6;
   desired.normalize();
   turnToward(hunter.fwd, desired, dt * 1.3);
-  hunter.pos.addScaledVector(hunter.fwd, dt * (range > 100 ? 95 : 68) * altitudeSpeed(Math.max(hunter.pos.y, player.pos.y)));
+  hunter.pos.addScaledVector(hunter.fwd, dt * 55 * altitudeSpeed(hunter.pos.y));
   hunter.pos.y = clamp(hunter.pos.y, 18, MAX_ALTITUDE);
   hunter.pos.x = clamp(hunter.pos.x, -bound, bound);
   hunter.pos.z = clamp(hunter.pos.z, -bound, bound);
   if (city.chunkAt(hunter.pos.x, hunter.pos.y, hunter.pos.z) >= 0) city.destroySphere(hunter.pos, 6, 25, 15);
-  if (range < 7) damagePlayer(12);
   hunter.update(dt, elapsed);
-  enemyShot -= dt;
-  if (range < 240 && enemyShot <= 0 && charge <= 0 && beamTime <= 0) {
-    aim.copy(player.pos).addScaledVector(player.fwd, Math.min(75, speed * 0.18)).sub(hunter.mouth);
-    if (city.raycast(hunter.mouth, aim.normalize(), range, ray) === Infinity) {
-      projectiles.fire('frost', hunter.mouth, aim.multiplyScalar(105), 2);
-      enemyShot = 2.5;
-    } else enemyShot = 0.5;
-  }
-  beamCooldown -= dt;
-  if (range < 190 && charge <= 0 && beamTime <= 0 && beamCooldown <= 0) {
-    aim.subVectors(player.pos, hunter.mouth);
-    if (city.raycast(hunter.mouth, aim.normalize(), range, ray) === Infinity) { charge = 1.35; audio.play('charge'); }
-    else beamCooldown = 1;
-  }
-  if (charge > 0) {
-    charge -= dt;
-    hunter.jaw = 1;
-    beam.charge(hunter.mouth, 1 - Math.max(0, charge) / 1.35);
-    $('warn').style.opacity = '1';
-    if (charge <= 0) {
-      beamTime = 0.7; beamHitTime = 0; beamCooldown = 7;
-      beamDirection.subVectors(player.pos, hunter.mouth).normalize();
-      beam.charge(hunter.mouth, 0);
-    }
-  } else if (beamTime > 0) {
-    beamTime -= dt;
-    beamHitTime -= dt;
-    const a = hunter.mouth;
-    const wall = city.raycast(a, beamDirection, 230, ray);
-    const endPoint = tmp2.copy(a).addScaledVector(beamDirection, Math.min(wall, 230));
-    beam.show(a, endPoint, camera.position, elapsed);
-    city.damageSphere(endPoint, 6, dt * 100);
-    if (player.segDist(a, endPoint) < 4.2 && beamHitTime <= 0) { damagePlayer(11); beamHitTime = 0.25; }
-    if (beamTime <= 0) { beam.hide(); $('warn').style.opacity = '0'; hunter.jaw = 0; }
-  } else { beam.hide(); hunter.jaw = Math.max(0, hunter.jaw - dt * 4); $('warn').style.opacity = '0'; }
 }
 
 function updateCamera(dt) {
