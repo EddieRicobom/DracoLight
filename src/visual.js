@@ -166,11 +166,17 @@ export function createVisualPipeline(renderer, scene, camera) {
         color = max(vec3(0.0), (color - 0.018) * 1.025 + 0.018);
         vec2 p = vUv * 2.0 - 1.0;
         color *= 1.0 - 0.09 * smoothstep(0.2, 1.7, dot(p, p));
+        // Quantize neutral pixels after tone mapping. Colored ink stays colored.
+        float high = max(color.r, max(color.g, color.b));
+        float low = min(color.r, min(color.g, color.b));
+        if (high - low < 0.025) {
+          color = vec3(step(0.5, dot(color, vec3(0.2126, 0.7152, 0.0722))));
+        }
         gl_FragColor = vec4(color, 1.0);
       }`,
   });
-  composer.addPass(grade);
   composer.addPass(new OutputPass());
+  composer.addPass(grade);
   composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
   return composer;
 }
