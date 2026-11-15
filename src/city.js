@@ -156,6 +156,8 @@ const paint = { canvas: null, ctx: null, tex: null, dirty: false, t: 0.15 };
 function scorchPatch(m, paving = false, maps = asphalt) {
   m.normalMap = maps.normal;
   m.userData.cityPaint = true;
+  m.userData.cityGround = true;
+  m.userData.cityPaving = paving;
   m.onBeforeCompile = (s) => {
     s.uniforms.uScorch = { value: scorch.tex };
     s.uniforms.uCityPaint = { value: paint.tex };
@@ -335,15 +337,16 @@ export class City {
 
   _buildGround() {
     // far ground
-    const far = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000).rotateX(-Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0x29343b, roughness: 1 }));
+    const farMaterial = new THREE.MeshStandardMaterial({ color: 0xf1f1f1, roughness: 1 });
+    farMaterial.userData.cityGround = true;
+    const far = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000).rotateX(-Math.PI / 2), farMaterial);
     far.position.y = -0.05; far.receiveShadow = true; this.scene.add(far);
 
     // road surface with markings (canvas)
     const S = 2048, c = document.createElement('canvas'); c.width = c.height = S;
     const g = c.getContext('2d'), k = S / (2 * HALF), R = rng(7);
-    g.fillStyle = '#46535a'; g.fillRect(0, 0, S, S);
-    for (let i = 0; i < 26000; i++) { const v = 40 + R() * 30 | 0; g.fillStyle = `rgba(${v},${v},${v + 2},0.35)`; g.fillRect(R() * S, R() * S, 2 + R() * 3, 2 + R() * 3); }
+    g.fillStyle = '#dadada'; g.fillRect(0, 0, S, S);
+    for (let i = 0; i < 26000; i++) { const v = 150 + R() * 45 | 0; g.fillStyle = `rgba(${v},${v},${v},0.25)`; g.fillRect(R() * S, R() * S, 2 + R() * 3, 2 + R() * 3); }
     for (let i = 0; i < 260; i++) { g.fillStyle = 'rgba(20,20,22,0.25)'; g.beginPath(); g.ellipse(R() * S, R() * S, 4 + R() * 14, 3 + R() * 8, R() * 3, 0, 7); g.fill(); }
     // Asphalt repair patches and fine transverse seams break up the flat road plane.
     for (let i = 0; i < 410; i++) {

@@ -156,21 +156,27 @@ export function createVisualPipeline(renderer, scene, camera) {
   composer.addPass(new RenderPass(scene, camera));
   composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.3, 1.35));
   const grade = new ShaderPass({
-    uniforms: { tDiffuse: { value: null } },
+    uniforms: { tDiffuse: { value: null }, uHalftone: { value: 0 } },
     vertexShader: `varying vec2 vUv;
       void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `uniform sampler2D tDiffuse;
+      uniform float uHalftone;
       varying vec2 vUv;
       void main() {
         vec3 color = texture2D(tDiffuse, vUv).rgb;
         color = max(vec3(0.0), (color - 0.018) * 1.025 + 0.018);
         vec2 p = vUv * 2.0 - 1.0;
         color *= 1.0 - 0.09 * smoothstep(0.2, 1.7, dot(p, p));
-        // Quantize neutral pixels after tone mapping. Colored ink stays colored.
-        float high = max(color.r, max(color.g, color.b));
-        float low = min(color.r, min(color.g, color.b));
-        if (high - low < 0.025) {
-          color = vec3(step(0.5, dot(color, vec3(0.2126, 0.7152, 0.0722))));
+        if (uHalftone > 0.5) {
+          // One luminance-based screen modulates every channel equally, so
+          // neutral scenery remains neutral and colored paint keeps its hue.
+          vec2 fromCentre = fract(gl_FragCoord.xy / 8.0) - 0.5;
+          float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+          float radiusSquared = (1.0 - clamp(luminance, 0.0, 1.0)) * 0.31831;
+          float mark = 1.0 - smoothstep(radiusSquared - 0.035,
+                                      radiusSquared + 0.035, dot(fromCentre, fromCentre));
+          float modulation = mix(1.12, 0.72, mark);
+          color = mix(color, min(color * modulation, vec3(1.0)), 0.6);
         }
         gl_FragColor = vec4(color, 1.0);
       }`,
@@ -178,5 +184,21 @@ export function createVisualPipeline(renderer, scene, camera) {
   composer.addPass(new OutputPass());
   composer.addPass(grade);
   composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+  const shadingControls = typeof document !== 'undefined'
+    ? document.querySelectorAll('input[name="shadingMode"]') : [];
+  const storageKey = 'dracoLight.shadingMode';
+  composer.setHalftone = (enabled) => {
+    const mode = enabled ? 'halftone' : 'normal';
+    grade.uniforms.uHalftone.value = enabled ? 1 : 0;
+    shadingControls.forEach((input) => { input.checked = input.value === mode; });
+    try { window.localStorage.setItem(storageKey, mode); } catch { /* Private browsing can disable storage. */ }
+  };
+  composer.isHalftoneEnabled = () => grade.uniforms.uHalftone.value > 0.5;
+  let savedMode;
+  try { savedMode = window.localStorage.getItem(storageKey); } catch { /* Use the normal mode. */ }
+  if (savedMode === 'halftone') composer.setHalftone(true);
+  shadingControls.forEach((input) => input.addEventListener('change', () => {
+    if (input.checked) composer.setHalftone(input.value === 'halftone');
+  }));
   return composer;
 }

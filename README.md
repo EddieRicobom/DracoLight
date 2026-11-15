@@ -8,9 +8,9 @@ O jogo aceita teclado e mouse, controle com analógicos ou controles de toque em
 
 Segure Shift ou o gatilho direito para impulsionar. Ao ultrapassar aproximadamente 343 m/s, o voo produz uma onda de choque e um estrondo. Para reconstruir a cidade, pause o jogo e selecione **Reconstruir cidade**.
 
-Mergulhar aumenta continuamente a velocidade; frear ou interromper um mergulho muito rápido produz uma onda de impacto.
+Mergulhar aumenta continuamente a velocidade; frear ou interromper um mergulho muito rápido produz uma onda de impacto. Ao alcançar Mach 3 a 7, o voo ganha camadas progressivas de efeitos de velocidade. As nuvens se afastam quando o dragão passa e depois voltam a se formar.
 
-Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros, que desaparecem gradualmente após cerca de 15 segundos; use **Limpar tinta** para apagá-los antes. A tinta também colore as partes da cidade que toca; essa pintura permanece até ser limpa ou a cidade ser reconstruída.
+No menu inicial ou de pausa, escolha entre visual normal e impressão pontilhada de meio-tom. Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros, que desaparecem gradualmente após cerca de 15 segundos; use **Limpar tinta** para apagá-los antes. A tinta também colore as partes da cidade que toca; essa pintura permanece até ser limpa ou a cidade ser reconstruída.
 
 Voe em círculos na mesma direção para formar um tornado de tinta. Continuar girando faz o tornado crescer e permanecer por mais tempo; a velocidade do voo influencia sua rotação.
 

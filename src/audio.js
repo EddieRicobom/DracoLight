@@ -42,13 +42,14 @@ export class GameAudio {
     }
     if (!c || !this.windGain) return;
     const amount = Math.min(1, speedMps / 500);
-    const volume = active ? 0.006 + amount * 0.045 : 0;
+    const hypersonic = Math.max(0, Math.min(1, (speedMps / 343 - 3) / 4));
+    const volume = active ? 0.006 + amount * 0.045 + hypersonic * 0.012 : 0;
     if (active) this.windGain.gain.setTargetAtTime(volume, c.currentTime, 0.18);
     else {
       this.windGain.gain.cancelScheduledValues(c.currentTime);
       this.windGain.gain.setValueAtTime(0, c.currentTime);
     }
-    this.windFilter.frequency.setTargetAtTime(300 + amount * 1700, c.currentTime, 0.25);
+    this.windFilter.frequency.setTargetAtTime(300 + amount * 1700 + hypersonic * 1200, c.currentTime, 0.25);
     if (!active || !Number.isFinite(speed)) return;
     if (speedMps < 310) this.supersonic = false;
     else if (speedMps >= 343 && !this.supersonic) {

@@ -32,7 +32,7 @@ test('monochrome preserves existing material shader hooks and avoids duplicate w
   material.onBeforeCompile(shader, {});
   assert.match(shader.fragmentShader, /gl_FragColor=vec4\(\.5\)/);
   assert.equal((shader.fragmentShader.match(/void monochromeOriginalMain/g) || []).length, 1);
-  assert.match(shader.fragmentShader, /vec3\(bw\)/);
+  assert.match(shader.fragmentShader, /vec3\(tone\)/);
 });
 
 test('ink outline preserves a material shader hook and applies only once', () => {

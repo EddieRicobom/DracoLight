@@ -16,6 +16,7 @@ import { makeMonochrome } from './monochrome.js';
 import { addInkOutline } from './outline.js';
 import { clamp, damp, turnToward, U } from './util.js';
 import { createSky, createVisualPipeline } from './visual.js';
+import { createClouds } from './clouds.js';
 
 const $ = (id) => document.getElementById(id);
 let recordWorld = () => {};
@@ -66,6 +67,8 @@ const sky = createSky(scene);
 makeMonochrome(sky);
 sky.scale.setScalar(25);
 const composer = createVisualPipeline(renderer, scene, camera);
+const clouds = createClouds(scene);
+makeMonochrome(clouds.mesh);
 
 // The flight, world and presentation systems share only the local player state.
 // This leaves room for other pilots later without adding a network dependency now.
@@ -431,7 +434,9 @@ function updateCamera(dt) {
 function updateHud(dt) {
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
-  readouts.textContent = `Velocidade: ${Math.round(actualSpeed * 3.6).toLocaleString('pt-BR')} km/h · Altitude: ${Math.round(activePosition().y).toLocaleString('pt-BR')} m`;
+  const mach = actualSpeed / 343;
+  const machLabel = mach >= 1 ? ` · Mach ${mach.toFixed(1).replace('.', ',')}` : '';
+  readouts.textContent = `Velocidade: ${Math.round(actualSpeed * 3.6).toLocaleString('pt-BR')} km/h${machLabel} · Altitude: ${Math.round(activePosition().y).toLocaleString('pt-BR')} m`;
   fpsTime += dt;
   frames++;
   if (fpsTime > 0.5) {
@@ -656,6 +661,13 @@ function frame(now) {
     U.uTime.value = elapsed;
     if (playerMode === 'dragon') updateFlight(dt, pad);
     else updateHuman(dt, pad);
+    let cloudDragonPosition = playerMode === 'dragon' ? player.pos : null;
+    if (!cloudDragonPosition && coop.role === 'guest') {
+      for (const remote of remotes.values()) {
+        if (remote.mode === 'dragon') { cloudDragonPosition = remote.actor.pos; break; }
+      }
+    }
+    clouds.update(dt, cloudDragonPosition, !!cloudDragonPosition);
     city.update(dt, activePosition());
     urban.update(dt);
     polyProps.update(dt);

@@ -70,7 +70,7 @@ class Pool {
 }
 
 // type ids
-const FIRE = 1, SPARK = 2, FLASH = 3, FROST = 4, EMBER = 5;
+const FIRE = 1, SPARK = 2, FLASH = 3, FROST = 4, EMBER = 5, SPEED = 6;
 const SMOKE = 1, DUST = 2, STEAM = 3;
 
 export class FX {
@@ -99,7 +99,7 @@ export class FX {
     const ringGeometry = new THREE.TorusGeometry(1, 0.025, 5, 48);
     for (let i = 0; i < 2; i++) {
       const mesh = new THREE.Mesh(ringGeometry, new THREE.MeshBasicMaterial({
-        color: i ? 0x93e6ff : 0xffffff, transparent: true, opacity: 0,
+        color: i ? 0xb8b8b8 : 0xffffff, transparent: true, opacity: 0,
         blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
       }));
       mesh.visible = false;
@@ -115,45 +115,71 @@ export class FX {
     this.speedWakeTime = 0;
     // A single screen-space draw call gives a sense of speed without covering the aim point.
     const streakGeometry = new THREE.BufferGeometry();
-    const streakData = new Float32Array(28 * 6 * 4);
-    const streakIndices = new Uint16Array(28 * 12);
-    for (let i = 0; i < 28; i++) {
-      const angle = (i + (i % 3) * .29) * Math.PI * 2 / 28;
+    const baseStreaks = 28, tierStreaks = 10, streakCount = baseStreaks + tierStreaks * 5;
+    const streakData = new Float32Array(streakCount * 6 * 4);
+    const streakTiers = new Float32Array(streakCount * 6);
+    const streakIndices = new Uint16Array(streakCount * 12);
+    for (let i = 0; i < streakCount; i++) {
+      const tier = i < baseStreaks ? 0 : 1 + Math.floor((i - baseStreaks) / tierStreaks);
+      const withinTier = i < baseStreaks ? i : (i - baseStreaks) % tierStreaks;
+      const count = tier ? tierStreaks : baseStreaks;
+      const angle = (withinTier + tier * .37 + (i % 3) * .29) * Math.PI * 2 / count;
       const phase = (i * .61803398875) % 1;
       for (let row = 0; row < 3; row++) for (let side = 0; side < 2; side++) {
-        const k = (i * 6 + row * 2 + side) * 4;
+        const vertex = i * 6 + row * 2 + side;
+        const k = vertex * 4;
         streakData[k] = angle;
         streakData[k + 1] = phase;
         streakData[k + 2] = row * .5;
         streakData[k + 3] = side ? 1 : -1;
+        streakTiers[vertex] = tier;
       }
       const v = i * 6, q = i * 12;
       streakIndices.set([v,v+1,v+2,v+2,v+1,v+3,v+2,v+3,v+4,v+4,v+3,v+5],q);
     }
     streakGeometry.setAttribute('aStreak', new THREE.BufferAttribute(streakData, 4));
+    streakGeometry.setAttribute('aTier', new THREE.BufferAttribute(streakTiers, 1));
     streakGeometry.setIndex(new THREE.BufferAttribute(streakIndices, 1));
     this.speedStreaks = new THREE.Mesh(streakGeometry, new THREE.ShaderMaterial({
-      uniforms: { uTime: { value: 0 }, uPower: { value: 0 }, uDive: { value: 0 } },
+      uniforms: { uTime: { value: 0 }, uPower: { value: 0 }, uDive: { value: 0 }, uMach: { value: 0 } },
       transparent: true, depthTest: false, depthWrite: false,
       blending: THREE.AdditiveBlending, toneMapped: false,
-      vertexShader: `attribute vec4 aStreak;
-        uniform float uTime; uniform float uPower; uniform float uDive;
-        varying float vAlpha; varying float vDive;
+      vertexShader: `attribute vec4 aStreak; attribute float aTier;
+        uniform float uTime; uniform float uPower; uniform float uDive; uniform float uMach;
+        varying float vAlpha; varying float vDive; varying float vTier;
         void main(){
-          float flow=fract(aStreak.y+uTime*(.55+uPower*1.5));
+          float tier=aTier;
+          float unlocked=tier<.5 ? 1. : smoothstep(tier+1.85,tier+2.12,uMach);
+          float flow=fract(aStreak.y+uTime*(.55+uPower*1.5+tier*.3));
           vec2 radial=vec2(cos(aStreak.x),sin(aStreak.x));
           vec2 across=vec2(-radial.y,radial.x);
           float base=.57+flow*.62;
           float length=(.045+uPower*.20+uDive*.055)*(.5+flow*.5);
+          float bend=0.;
+          if(tier>.5){
+            base=.53+flow*(.54+tier*.025);
+            length=(.08+tier*.035)*(.55+flow*.45);
+            // Higher tiers bend and pulse their filaments without filling the aim point.
+            bend=sin(flow*12.+uTime*(2.+tier)+aStreak.x*3.)*tier*.003;
+          }
           vec2 xy=radial*(base+aStreak.z*length)
-            +across*aStreak.w*(.0025+uPower*.0025);
+            +across*(aStreak.w*(.0025+uPower*.0025+tier*.0009)+bend);
           gl_Position=vec4(xy,0.,1.);
-          vAlpha=uPower*(1.-abs(aStreak.z*2.-1.))*(.24+flow*.18);
-          vDive=uDive;
+          vAlpha=uPower*unlocked*(1.-abs(aStreak.z*2.-1.))*(.24+flow*.18);
+          if(tier>.5){
+            float rhythm=1.;
+            if(tier>1.5 && tier<2.5) rhythm=.7+.3*sin(uTime*3.+aStreak.x*2.);
+            else if(tier>2.5 && tier<3.5) rhythm=.55+.45*sin(uTime*4.+aStreak.y*18.);
+            else if(tier>3.5 && tier<4.5) rhythm=.6+.4*sin(uTime*5.+aStreak.x*4.);
+            else if(tier>4.5) rhythm=.8+.2*sin(uTime*6.+aStreak.y*12.);
+            vAlpha*= (.4+.11*tier)*rhythm;
+          }
+          vDive=uDive; vTier=tier;
         }`,
-      fragmentShader: `varying float vAlpha; varying float vDive;
+      fragmentShader: `varying float vAlpha; varying float vDive; varying float vTier;
         void main(){
-          vec3 color=mix(vec3(.42,.78,1.),vec3(1.,.69,.36),vDive*.65);
+          float brightness=vTier<.5 ? .64 : .48+.105*vTier;
+          vec3 color=vec3(brightness);
           gl_FragColor=vec4(color,vAlpha);
         }`,
     }));
@@ -164,7 +190,7 @@ export class FX {
     this.speedShockwaves = [];
     for (let i = 0; i < 3; i++) {
       const mesh = new THREE.Mesh(ringGeometry, new THREE.MeshBasicMaterial({
-        color: 0xbfeaff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+        color: 0xe4e4e4, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
         depthWrite: false, toneMapped: false,
       }));
       mesh.visible = false;
@@ -182,6 +208,7 @@ export class FX {
       this.speedWakeTime = 0;
       this.speedStreaks.visible = false;
       this.speedStreaks.material.uniforms.uPower.value = 0;
+      this.speedStreaks.material.uniforms.uMach.value = 0;
       for (const ring of this.speedRings) ring.mesh.visible = false;
       return;
     }
@@ -191,6 +218,7 @@ export class FX {
     const follow = 1 - Math.exp(-Math.min(dt, .05) * 5);
     uniforms.uPower.value += (target - uniforms.uPower.value) * follow;
     uniforms.uDive.value += (dive - uniforms.uDive.value) * follow;
+    uniforms.uMach.value += (Math.min(speedMps / 343, 7.3) - uniforms.uMach.value) * follow;
     uniforms.uTime.value += Math.min(dt, .05);
     this.speedStreaks.visible = uniforms.uPower.value > .025;
     if (!this.speedSupersonic && speedMps >= 343) {
@@ -212,7 +240,7 @@ export class FX {
       for (let i = 0; i < count; i++) {
         const back = 10 + Math.random() * 12;
         const spread = (2 + strength * 4) * (Math.random() - 0.5);
-        A.spawn(FROST, position.x - direction.x * back + spread,
+        A.spawn(SPEED, position.x - direction.x * back + spread,
           position.y - direction.y * back + (Math.random() - 0.5) * 4,
           position.z - direction.z * back + (Math.random() - 0.5) * 4,
           -direction.x * 12, -direction.y * 12, -direction.z * 12,
@@ -356,6 +384,9 @@ export class FX {
       else if (ty === FROST) {
         const dr = Math.exp(-2 * dt); vx *= dr; vy = vy * dr - 4 * dt; vz *= dr;
         r = 2.2; g = 4.5; b = 9; a = (1 - t) * (1 - t);
+      } else if (ty === SPEED) {
+        const dr = Math.exp(-2 * dt); vx *= dr; vy = vy * dr - 4 * dt; vz *= dr;
+        r = g = b = 3.2; a = (1 - t) * (1 - t);
       }
       A.v[i * 3] = vx; A.v[i * 3 + 1] = vy; A.v[i * 3 + 2] = vz;
       A.p[i * 3] += vx * dt; A.p[i * 3 + 1] += vy * dt; A.p[i * 3 + 2] += vz * dt;
