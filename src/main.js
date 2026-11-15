@@ -9,6 +9,9 @@ import { InkTrail } from './ink.js';
 import { createTouchControls } from './touch.js';
 import { advanceDiveSpeed, advanceDiveImpact } from './dive.js';
 import { PaintTornado } from './tornado.js';
+import { PaintMeteor } from './meteor.js';
+import { makeMonochrome } from './monochrome.js';
+import { addInkOutline } from './outline.js';
 import { clamp, damp, turnToward, U } from './util.js';
 import { createSky, createVisualPipeline } from './visual.js';
 
@@ -53,12 +56,14 @@ const fill = new THREE.DirectionalLight(0x819cca, 0.8);
 fill.position.set(160, 100, -220);
 scene.add(fill);
 const sky = createSky(scene);
+makeMonochrome(sky);
 sky.scale.setScalar(25);
 const composer = createVisualPipeline(renderer, scene, camera);
 
 // The flight, world and presentation systems share only the local player state.
 // This leaves room for other pilots later without adding a network dependency now.
 const fx = new FX(scene, camera);
+for (const item of scene.children) makeMonochrome(item);
 const inkLeft = new InkTrail(scene, camera, -9);
 const inkRight = new InkTrail(scene, camera, 9);
 const tornado = new PaintTornado(scene);
@@ -83,19 +88,30 @@ $('clearPaint').addEventListener('click', () => {
   $('status').textContent = 'Tinta removida.';
 });
 choosePaint(paintColor.value);
+const beforeCity = new Set(scene.children);
 const city = new City(scene, fx);
 const urban = createUrbanDetails(scene, city);
 const polyProps = createPolyProps(scene, city);
+for (const item of scene.children) if (!beforeCity.has(item)) makeMonochrome(item);
+polyProps.ready.then(() => {
+  for (const item of scene.children) if (item.name.startsWith('Poly Haven ')) makeMonochrome(item);
+});
+const meteor = new PaintMeteor(scene, city, fx, audio);
 const resetButton = $('resetCity');
 resetButton.addEventListener('click', () => {
   city.reset();
   urban.reset();
   polyProps.reset();
   fx.burning.length = 0;
+  meteor.reset();
   $('sc').textContent = '0';
   $('status').textContent = 'Cidade reconstruída.';
 });
+const beforeDragon = new Set(scene.children);
 const player = new Dragon(scene, PALETTES.red);
+for (const item of scene.children) if (!beforeDragon.has(item)) item.traverse((object) => {
+  if (object.material) for (const material of [object.material].flat()) addInkOutline(material);
+});
 player.pos.set(0, 115, 115);
 player.fwd.set(0, 0, -1);
 player.resetTrail();
@@ -117,8 +133,8 @@ let actualSpeed = FLIGHT.cruise;
 let diveImpact = null;
 let collisionTime = 0, wakeTime = 0, fpsTime = 0, frames = 0;
 const keys = new Set();
-const touch = createTouchControls({ onPause: () => pause() });
-let activeGamepad = null, gamepadStartHeld = false, draggingMouse = false;
+const touch = createTouchControls({ onPause: () => pause(), onPaint: () => firePaint() });
+let activeGamepad = null, gamepadStartHeld = false, gamepadPaintHeld = false, draggingMouse = false;
 const stick = (value) => Math.abs(value || 0) < 0.14 ? 0 : Math.sign(value) * (Math.abs(value) - 0.14) / 0.86;
 function currentGamepad() {
   const pads = navigator.getGamepads?.() || [];
@@ -188,6 +204,10 @@ Promise.resolve().then(() => {
   $('status').textContent = 'Atualize a página para tentar novamente.';
 });
 go.addEventListener('click', start);
+function firePaint() {
+  if (state === 'playing') meteor.fire(player.pos, player.fwd, paintColor.value);
+}
+canvas.addEventListener('contextmenu', (event) => { event.preventDefault(); firePaint(); });
 canvas.addEventListener('click', () => {
   if (!touchDevice && state === 'playing' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.()?.catch?.(() => {});
 });
@@ -300,6 +320,7 @@ function updateFlight(dt, pad) {
   inkLeft.update(dt, player.pos, f, speed, boosting);
   inkRight.update(dt, player.pos, f, speed, boosting);
   tornado.update(dt, player.pos, f, actualSpeed, paintColor.value);
+  meteor.update(dt, old, player.pos, actualSpeed);
 }
 
 function updateCamera(dt) {
@@ -360,6 +381,9 @@ function frame(now) {
   const dt = Math.min(0.05, rawDt);
   const pad = currentGamepad();
   const startHeld = buttonDown(pad, 9);
+  const paintHeld = buttonDown(pad, 2);
+  if (paintHeld && !gamepadPaintHeld) firePaint();
+  gamepadPaintHeld = paintHeld;
   if (startHeld && !gamepadStartHeld) {
     if (state === 'playing') pause();
     else if (!go.disabled) start();

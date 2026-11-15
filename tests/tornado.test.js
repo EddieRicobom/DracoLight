@@ -13,7 +13,9 @@ test('spiral makes one growing tornado, straight flight does not, and clear remo
       new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), radius * angularSpeed, '#22aaff');
   }
   assert.equal(effect.vortices.length, 1);
-  assert.ok(effect.vortices[0].points.scale.x > 1);
+  assert.ok(effect.vortices[0].group.scale.x > 1);
+  assert.equal(effect.vortices[0].group.children.filter((child) => child.isMesh).length, 4);
+  assert.equal(effect.vortices[0].group.children.filter((child) => child.isPoints).length, 1);
   assert.ok(effect.vortices[0].life - effect.vortices[0].age >= 20);
   effect.clear();
   assert.equal(scene.children.length, 0);
@@ -21,4 +23,26 @@ test('spiral makes one growing tornado, straight flight does not, and clear remo
   for (let i = 0; i < 300; i++) {
     assert.equal(detector.update(dt, { x: i * 2, z: 0 }, { x: 1, z: 0 }, 60), null);
   }
+});
+
+test('paint ribbons widen upward and faster flight makes the tornado spin faster', () => {
+  const scene = new THREE.Scene();
+  const effect = new PaintTornado(scene);
+  const spiral = { x: 0, y: 100, z: 0, radius: 90, duration: 8, direction: 1, generation: 1, flightSpeed: 60 };
+  effect.spawn(spiral, '#22aaff');
+  const slow = effect.vortices[0];
+  const ribbon = slow.group.children[0].geometry.getAttribute('position');
+  const bottomRadius = Math.hypot(ribbon.getX(0), ribbon.getZ(0));
+  const topRadius = Math.hypot(ribbon.getX(ribbon.count - 1), ribbon.getZ(ribbon.count - 1));
+  assert.ok(topRadius > bottomRadius * 5);
+  assert.equal(slow.group.children[4].geometry.getAttribute('position').count, 160);
+  effect.update(0.1, null, null, 0);
+  const slowTurn = slow.group.rotation.y;
+  effect.spawn({ ...spiral, generation: 2, flightSpeed: 120 }, '#22aaff');
+  const fast = effect.vortices[1];
+  effect.update(0.1, null, null, 0);
+  assert.ok(fast.group.rotation.y > slowTurn);
+  assert.equal(fast.group.rotation.y, slowTurn * 2);
+  effect.clear();
+  assert.equal(scene.children.length, 0);
 });

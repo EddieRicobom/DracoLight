@@ -3,7 +3,7 @@ import * as THREE from 'three';
 // Recognize a sustained, coherent horizontal turn whose path bends back on itself.
 export class SpiralDetector {
   constructor() { this.reset(); }
-  reset() { this.generation = (this.generation || 0) + 1; this.samples = []; this.lastHeading = null; this.sign = 0; this.turn = 0; this.duration = 0; this.distance = 0; this.emittedAt = 0; this.straightTime = 0; }
+  reset() { this.generation = (this.generation || 0) + 1; this.samples = []; this.lastHeading = null; this.sign = 0; this.turn = 0; this.duration = 0; this.distance = 0; this.speedTime = 0; this.emittedAt = 0; this.straightTime = 0; }
   update(dt, pos, forward, speed) {
     if (!(dt > 0 && dt <= 0.25) || !pos || !forward || speed < 5) { this.reset(); return null; }
     const heading = Math.atan2(forward.x, forward.z);
@@ -27,6 +27,7 @@ export class SpiralDetector {
     }
     this.duration += dt;
     this.distance += step;
+    this.speedTime += speed * dt;
     this.samples.push({ x: pos.x, z: pos.z });
     if (this.samples.length > 800) this.samples.shift();
     const radius = this.distance / Math.max(this.turn, 0.001);
@@ -35,8 +36,54 @@ export class SpiralDetector {
     this.emittedAt = this.duration;
     let x = 0, z = 0;
     for (const sample of this.samples) { x += sample.x; z += sample.z; }
-    return { x: x / this.samples.length, y: pos.y, z: z / this.samples.length, radius, duration: this.duration, direction: this.sign, generation: this.generation };
+    return { x: x / this.samples.length, y: pos.y, z: z / this.samples.length, radius, duration: this.duration, direction: this.sign, generation: this.generation, flightSpeed: this.speedTime / this.duration };
   }
+}
+
+const RIBBONS = 4;
+const RIBBON_STEPS = 96;
+const DROPS = 160;
+
+function ribbonGeometry(radius, height, phase) {
+  const vertices = new Float32Array((RIBBON_STEPS + 1) * 6);
+  const indices = [];
+  for (let i = 0; i <= RIBBON_STEPS; i++) {
+    const t = i / RIBBON_STEPS;
+    const r = radius * (0.10 + 0.90 * t ** 1.35);
+    const angle = phase + t * Math.PI * 11;
+    const spread = (0.17 + 0.06 * Math.sin(t * Math.PI * 7 + phase)) * Math.sin(Math.PI * (0.03 + 0.94 * t));
+    for (let side = 0; side < 2; side++) {
+      const a = angle + (side ? spread : -spread);
+      const at = (i * 2 + side) * 3;
+      vertices[at] = Math.cos(a) * r;
+      vertices[at + 1] = t * height;
+      vertices[at + 2] = Math.sin(a) * r;
+    }
+    if (i < RIBBON_STEPS) {
+      const n = i * 2;
+      indices.push(n, n + 1, n + 2, n + 1, n + 3, n + 2);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function dropGeometry(radius, height) {
+  const vertices = new Float32Array(DROPS * 3);
+  for (let i = 0; i < DROPS; i++) {
+    const t = (i + 0.5) / DROPS;
+    const angle = i * 2.399963229728653 + t * Math.PI * 11;
+    const r = radius * (0.12 + 0.9 * t ** 1.35) * (0.85 + 0.3 * ((i * 37 % 101) / 101));
+    vertices[i * 3] = Math.cos(angle) * r;
+    vertices[i * 3 + 1] = t * height;
+    vertices[i * 3 + 2] = Math.sin(angle) * r;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  return geometry;
 }
 
 export class PaintTornado {
@@ -57,8 +104,11 @@ export class PaintTornado {
       const v = this.vortices[i];
       v.age += dt;
       if (v.age >= v.life) { this.remove(i); continue; }
-      v.points.rotation.y += dt * v.direction * 0.7;
-      v.material.uniforms.opacity.value = 0.7 * Math.min(1, v.age * 2, (v.life - v.age) / 2);
+      v.group.rotation.y += dt * v.direction * v.rotationSpeed;
+      v.group.position.y = v.baseY + Math.sin(v.age * 2) * 2;
+      const fade = Math.min(1, v.age * 2, (v.life - v.age) / 2);
+      for (const material of v.ribbonMaterials) material.opacity = 0.78 * fade;
+      v.dropMaterial.uniforms.opacity.value = 0.85 * fade;
     }
   }
   spawn(spiral, color) {
@@ -66,45 +116,50 @@ export class PaintTornado {
     const duration = Math.min(spiral.duration, 60);
     const radius = THREE.MathUtils.clamp(spiral.radius * 0.45 + duration * 2, 25, 180);
     const height = THREE.MathUtils.clamp(radius * 2.5, 80, 400);
-    const count = 420;
-    const vertices = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      const t = i / count;
-      const angle = t * Math.PI * 18 + Math.random() * 1.5;
-      const r = radius * (0.15 + 0.85 * t) * (0.75 + Math.random() * 0.5);
-      vertices[i * 3] = Math.cos(angle) * r;
-      vertices[i * 3 + 1] = t * height + (Math.random() - 0.5) * 8;
-      vertices[i * 3 + 2] = Math.sin(angle) * r;
+    const group = new THREE.Group();
+    const tint = new THREE.Color(color ?? 0xef4444);
+    const ribbonMaterials = [];
+    for (let i = 0; i < RIBBONS; i++) {
+      const material = new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+      const ribbon = new THREE.Mesh(ribbonGeometry(radius, height, i * Math.PI * 2 / RIBBONS), material);
+      ribbonMaterials.push(material);
+      group.add(ribbon);
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-    const material = new THREE.ShaderMaterial({
+    const dropMaterial = new THREE.ShaderMaterial({
       uniforms: { tint: { value: new THREE.Color(color ?? 0xef4444) }, size: { value: Math.max(5, radius * 0.10) }, opacity: { value: 0 } },
       vertexShader: `uniform float size; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv; gl_PointSize = clamp(size * 300.0 / max(1.0, -mv.z), 2.0, 36.0); }`,
-      fragmentShader: `uniform vec3 tint; uniform float opacity; void main() { float r = length(gl_PointCoord - vec2(0.5)); float alpha = (1.0 - smoothstep(0.32, 0.5, r)) * opacity; if (alpha < 0.01) discard; gl_FragColor = vec4(tint, alpha);
+      fragmentShader: `uniform vec3 tint; uniform float opacity; void main() { vec2 p = gl_PointCoord - vec2(0.5); float r = length(p * vec2(1.0, 0.82)); float alpha = (1.0 - smoothstep(0.3, 0.5, r)) * opacity; if (alpha < 0.01) discard; gl_FragColor = vec4(tint, alpha);
 #include <colorspace_fragment>
 } `,
       transparent: true, depthWrite: false
     });
-    const points = new THREE.Points(geometry, material);
-    points.position.set(spiral.x, spiral.y - height * 0.5, spiral.z);
-    points.frustumCulled = false;
-    this.scene.add(points);
-    this.vortices.push({ points, material, age: 0, life: Math.min(30, 8 + duration * 1.5), direction: spiral.direction, generation: spiral.generation, baseRadius: radius });
+    const drops = new THREE.Points(dropGeometry(radius, height), dropMaterial);
+    group.add(drops);
+    const baseY = spiral.y - height * 0.5;
+    group.position.set(spiral.x, baseY, spiral.z);
+    this.scene.add(group);
+    this.vortices.push({ group, ribbonMaterials, dropMaterial, age: 0, life: Math.min(30, 8 + duration * 1.5), direction: spiral.direction, generation: spiral.generation, baseRadius: radius, baseY, rotationSpeed: this.rotationSpeed(spiral.flightSpeed) });
   }
+  rotationSpeed(flightSpeed) { return THREE.MathUtils.clamp(flightSpeed * 0.012, 0.2, 4); }
   grow(v, spiral, color) {
     const radius = THREE.MathUtils.clamp(spiral.radius * 0.45 + Math.min(spiral.duration, 60) * 2, 25, 180);
     const scale = radius / v.baseRadius;
-    v.points.scale.setScalar(scale);
-    v.material.uniforms.size.value = Math.max(5, radius * 0.10);
-    if (color != null) v.material.uniforms.tint.value.set(color);
+    v.group.scale.setScalar(scale);
+    v.dropMaterial.uniforms.size.value = Math.max(5, radius * 0.10);
+    if (color != null) {
+      for (const material of v.ribbonMaterials) material.color.set(color);
+      v.dropMaterial.uniforms.tint.value.set(color);
+    }
+    v.rotationSpeed = this.rotationSpeed(spiral.flightSpeed);
     v.life = v.age + Math.min(30, 8 + spiral.duration * 1.5);
   }
   remove(index) {
     const [v] = this.vortices.splice(index, 1);
-    this.scene.remove(v.points);
-    v.points.geometry.dispose();
-    v.material.dispose();
+    this.scene.remove(v.group);
+    for (const child of v.group.children) {
+      child.geometry.dispose();
+      child.material.dispose();
+    }
   }
   clear() { while (this.vortices.length) this.remove(this.vortices.length - 1); this.detector.reset(); }
 }

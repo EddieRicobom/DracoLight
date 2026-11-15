@@ -1,6 +1,6 @@
 // Live, normalized touch input. The caller reads `state` each frame and owns
 // the game state (including whether a pause request can be accepted).
-export function createTouchControls({ root = document, onPause = () => {} } = {}) {
+export function createTouchControls({ root = document, onPause = () => {}, onPaint = () => {} } = {}) {
   const find = (id) => root.getElementById?.(id) ?? root.querySelector?.(`#${id}`);
   const state = {
     leftX: 0, leftY: 0, rightX: 0, rightY: 0,
@@ -100,6 +100,7 @@ export function createTouchControls({ root = document, onPause = () => {} } = {}
   bindButton('touchDescend', 'descend');
   bindButton('touchBoost', 'boost');
   find('touchPause')?.addEventListener('click', onPause, { signal });
+  find('touchPaint')?.addEventListener('click', onPaint, { signal });
 
   function reset() {
     sticks.forEach((release) => release());

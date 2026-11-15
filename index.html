@@ -113,6 +113,7 @@
     .touch-button:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
     #touchAscend{right:max(24px,env(safe-area-inset-right));bottom:calc(max(18px,env(safe-area-inset-bottom)) + clamp(86px,19vw,124px) + 14px)}
     #touchDescend{right:calc(max(24px,env(safe-area-inset-right)) + 56px);bottom:calc(max(18px,env(safe-area-inset-bottom)) + clamp(86px,19vw,124px) + 14px)}
+    #touchPaint{left:max(24px,env(safe-area-inset-left));bottom:calc(max(18px,env(safe-area-inset-bottom)) + clamp(86px,19vw,124px) + 14px)}
     #touchBoost{left:50%;bottom:max(20px,env(safe-area-inset-bottom));transform:translateX(-50%);width:70px;height:70px}
     #touchPause{left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));border-radius:10px}
     #menu .keys,#menu .desktop-help{display:none}
@@ -137,6 +138,7 @@
   <button id="touchAscend" class="touch-button" type="button" aria-label="Subir">Subir</button>
   <button id="touchDescend" class="touch-button" type="button" aria-label="Descer">Descer</button>
   <button id="touchBoost" class="touch-button" type="button" aria-label="Impulso">Impulso</button>
+  <button id="touchPaint" class="touch-button" type="button" aria-label="Disparar bola de tinta">Tinta</button>
   <button id="touchPause" class="touch-button" type="button" aria-label="Pausar">Ⅱ</button>
 </div>
 <div id="menu">
@@ -149,10 +151,11 @@
     <span><kbd>A</kbd> <kbd>D</kbd></span><span>desviar para os lados</span>
     <span><kbd>Espaço</kbd> <kbd>C</kbd></span><span>subir / descer</span>
     <span><kbd>Shift</kbd></span><span>impulso / atravessar prédios</span>
+    <span><kbd>Mouse direito</kbd> / <kbd>X</kbd></span><span>disparar bola de tinta</span>
     <span><kbd>Esc</kbd></span><span>pausar</span>
   </div>
   <p class="desktop-help">Controle: analógico esquerdo movimenta · gatilho direito impulsiona · Start pausa.</p>
-  <p class="mobile-help">Use os direcionais de toque para voar. Toque em pausa para escolher a tinta.</p>
+  <p class="mobile-help">Use os direcionais de toque para voar e toque em Tinta para disparar. Toque em pausa para escolher a cor.</p>
   <fieldset class="paint" id="paintControls">
     <legend>Tinta</legend>
     <p>Escolha uma cor. Pause para abrir a paleta. Voe em círculos para criar um tornado de tinta.</p>

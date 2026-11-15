@@ -10,9 +10,11 @@ Segure Shift ou o gatilho direito para impulsionar. Ao ultrapassar aproximadamen
 
 Mergulhar aumenta continuamente a velocidade; frear ou interromper um mergulho muito rápido produz uma onda de impacto.
 
-Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros; use **Limpar tinta** para apagar as marcas. O jogo limita a quantidade de marcas e remove as mais antigas quando esse limite é atingido.
+Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros, que desaparecem gradualmente após cerca de 15 segundos; use **Limpar tinta** para apagá-los antes.
 
-Voe em círculos na mesma direção para formar um tornado de tinta. Continuar girando faz o tornado crescer e permanecer por mais tempo.
+Voe em círculos na mesma direção para formar um tornado de tinta. Continuar girando faz o tornado crescer e permanecer por mais tempo; a velocidade do voo influencia sua rotação.
+
+Clique com o botão direito do mouse, pressione X no controle ou toque em **Tinta** para criar uma bola. Atravesse-a para lançar um meteoro com sua velocidade; ao alcançar o chão, ele destrói construções próximas.
 
 ## Executar localmente
 

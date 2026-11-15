@@ -11,6 +11,7 @@ export class InkTrail {
     this.splashes = [];
     this.maxPoints = 2048;
     this.maxSplashes = 512;
+    this.lifetime = 15;
     this.offset = new THREE.Vector3();
     this.side = new THREE.Vector3();
     this.tangent = new THREE.Vector3();
@@ -44,7 +45,8 @@ export class InkTrail {
           float edge=abs(vUv.x*2.-1.+ripple);
           float ink=1.-smoothstep(.54,.98,edge);
           float grain=.91+.09*sin(vUv.y*23.+vUv.x*16.)*sin(vUv.y*37.);
-          gl_FragColor=vec4(vColor,ink*grain*vAlpha);
+          float outline=smoothstep(.52,.77,edge+.035*sin(vUv.y*31.));
+          gl_FragColor=vec4(mix(vColor,vec3(.005),outline*.96),ink*grain*vAlpha);
           #include <colorspace_fragment>
         }`,
     }));
@@ -80,7 +82,8 @@ export class InkTrail {
           float theta=atan(q.y,q.x);
           float radius=length(q)*2.+.09*sin(theta*3.+vShape*11.);
           float ink=1.-smoothstep(.68,1.,radius);
-          gl_FragColor=vec4(vColor,ink*vAlpha);
+          float outline=smoothstep(.58,.83,radius+.035*sin(theta*7.));
+          gl_FragColor=vec4(mix(vColor,vec3(.005),outline*.96),ink*vAlpha);
           #include <colorspace_fragment>
         }`,
     }));
@@ -114,7 +117,6 @@ export class InkTrail {
           (Math.random() - .5) * 5 - direction.z * speed * .025,
         ),
         born: this.clock,
-        lifetime: 7 + Math.random() * 6,
         size: 1.5 + Math.random() * (boosting ? 3.5 : 2.5),
         shape: Math.random(),
         color: this.color.clone(),
@@ -135,7 +137,7 @@ export class InkTrail {
       });
       this.addSplashes(position, direction, speed, boosting);
     }
-    while (this.points.length > this.maxPoints) this.points.shift();
+    while (this.points.length && (this.points.length > this.maxPoints || this.clock - this.points[0].born >= this.lifetime)) this.points.shift();
     const n = this.points.length;
     for (let i = 0; i < n; i++) {
       const p = this.points[i];
@@ -145,6 +147,7 @@ export class InkTrail {
       this.view.subVectors(this.camera.position, p.position).normalize();
       this.side.crossVectors(this.tangent, this.view).normalize();
       const width = p.width;
+      const fade = THREE.MathUtils.clamp((this.lifetime - (this.clock - p.born)) / 3, 0, 1);
       for (let j = 0; j < 2; j++) {
         const k = (i * 2 + j) * 3, sign = j ? 1 : -1;
         this.positions[k] = p.position.x + this.side.x * width * sign;
@@ -153,7 +156,7 @@ export class InkTrail {
         this.colors[k] = p.color.r;
         this.colors[k + 1] = p.color.g;
         this.colors[k + 2] = p.color.b;
-        this.alpha[i * 2 + j] = .68;
+        this.alpha[i * 2 + j] = .68 * fade;
       }
     }
     let indexCount = 0;
@@ -177,6 +180,7 @@ export class InkTrail {
     let active = 0;
     for (const splash of this.splashes) {
       const age = this.clock - splash.born;
+      if (age >= this.lifetime) continue;
       const drift = Math.min(age, 1.5);
       const k = active * 3;
       this.splashPositions[k] = splash.origin.x + splash.velocity.x * drift;
@@ -185,7 +189,7 @@ export class InkTrail {
       this.splashColors[k] = splash.color.r;
       this.splashColors[k + 1] = splash.color.g;
       this.splashColors[k + 2] = splash.color.b;
-      this.splashAlpha[active] = .75;
+      this.splashAlpha[active] = .75 * THREE.MathUtils.clamp((this.lifetime - age) / 3, 0, 1);
       this.splashSizes[active] = splash.size;
       this.splashShapes[active] = splash.shape;
       this.splashes[active] = splash;
