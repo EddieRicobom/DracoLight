@@ -152,7 +152,7 @@ function propPaintMaterial(material) {
 
 // scorch decals painted on the ground in a 1024² canvas covering the whole city
 const scorch = { canvas: null, ctx: null, tex: null, dirty: false, t: 0 };
-const paint = { canvas: null, ctx: null, tex: null, dirty: false };
+const paint = { canvas: null, ctx: null, tex: null, dirty: false, t: 0.15 };
 function scorchPatch(m, paving = false, maps = asphalt) {
   m.normalMap = maps.normal;
   m.userData.cityPaint = true;
@@ -224,6 +224,8 @@ export class City {
     const c = document.createElement('canvas'); c.width = c.height = 2048;
     paint.canvas = c; paint.ctx = c.getContext('2d'); paint.tex = new THREE.CanvasTexture(c);
     paint.tex.colorSpace = THREE.SRGBColorSpace;
+    paint.t = 0.15;
+    this.paintTexture = paint.tex;
   }
   // Paint survives district streaming. Color is any value accepted by THREE.Color.
   paintSphere(position, radius, color) {
@@ -234,7 +236,7 @@ export class City {
     if (position.y - radius > GY * CH || position.y + radius < 0 ||
         position.x - radius > edge || position.x + radius < -edge ||
         position.z - radius > edge || position.z + radius < -edge) return 0;
-    const ink = new THREE.Color(color);
+    const ink = _paintColor.set(color);
     const rgba = [ink.r, ink.g, ink.b].map(v => Math.round(clamp(v, 0, 1) * 255));
     const x0 = Math.max(0, Math.floor((position.x - radius - OX) / CH));
     const x1 = Math.min(GX - 1, Math.floor((position.x + radius - OX) / CH));
@@ -252,6 +254,8 @@ export class City {
       const dz = Math.max(OZ + z * CH - position.z, 0, position.z - OZ - (z + 1) * CH);
       if (dx * dx + dy * dy + dz * dz > rr) continue;
       const o = i * 4;
+      if (this.paintData[o] === rgba[0] && this.paintData[o + 1] === rgba[1] &&
+          this.paintData[o + 2] === rgba[2] && this.paintData[o + 3] === 255) continue;
       this.paintData[o] = rgba[0]; this.paintData[o + 1] = rgba[1];
       this.paintData[o + 2] = rgba[2]; this.paintData[o + 3] = 255;
       const part = this.meshes[this.chunkPart[i]];
@@ -278,14 +282,19 @@ export class City {
             const dz = Math.max(0, Math.abs(prop.z - position.z) - width);
             const dy = Math.max(bottom - position.y, 0, position.y - top);
             if (dx * dx + dy * dy + dz * dz > rr) continue;
+            let changed = false;
             for (let part = 0; part < this.propPaintAttrs[prop.type].length; part++) {
               if (prop.type === 0 && ((part === 0 && position.y - radius > 5) || (part === 1 && position.y + radius < 3))) continue;
               const attr = this.propPaintAttrs[prop.type][part], o = prop.idx * 4;
+              if (attr.array[o] === rgba[0] && attr.array[o + 1] === rgba[1] &&
+                  attr.array[o + 2] === rgba[2] && attr.array[o + 3] === 255) continue;
               attr.array[o] = rgba[0]; attr.array[o + 1] = rgba[1];
               attr.array[o + 2] = rgba[2]; attr.array[o + 3] = 255;
+              attr.addUpdateRange(o, 4);
               attr.needsUpdate = true;
+              changed = true;
             }
-            count++;
+            if (changed) count++;
           }
         }
     }
@@ -298,6 +307,7 @@ export class City {
         paint.ctx.fillStyle = `#${ink.getHexString(THREE.SRGBColorSpace)}`;
         paint.ctx.beginPath(); paint.ctx.arc(px, pz, groundRadius * scale, 0, Math.PI * 2); paint.ctx.fill();
         paint.dirty = true;
+        count++;
       }
     }
     return count;
@@ -309,10 +319,10 @@ export class City {
       part.paintDirty = [0, part.ids.length - 1];
     }
     for (const group of this.propPaintAttrs) for (const attr of group) {
-      attr.array.fill(0); attr.needsUpdate = true;
+      attr.array.fill(0); attr.clearUpdateRanges(); attr.needsUpdate = true;
     }
     paint.ctx.clearRect(0, 0, paint.canvas.width, paint.canvas.height);
-    paint.tex.needsUpdate = true; paint.dirty = false;
+    paint.tex.needsUpdate = true; paint.dirty = false; paint.t = 0.15;
   }
   paintScorch(x, z, r, a = 0.7) {
     const px = ((x + HALF) / (2 * HALF)) * 1024, pz = ((z + HALF) / (2 * HALF)) * 1024, pr = (r / (2 * HALF)) * 1024;
@@ -548,7 +558,9 @@ export class City {
       mesh.setColorAt(local, c);
       info[local * 2] = L.style; info[local * 2 + 1] = L.seed;
       burn[local] = this.burnAttr.array[i];
-      color.set(this.paintData.subarray(i * 4, i * 4 + 4), local * 4);
+      const source = i * 4, target = local * 4;
+      color[target] = this.paintData[source]; color[target + 1] = this.paintData[source + 1];
+      color[target + 2] = this.paintData[source + 2]; color[target + 3] = this.paintData[source + 3];
     }
     mesh.computeBoundingSphere();
     this.scene.add(mesh);
@@ -1118,11 +1130,12 @@ export class City {
     }
     scorch.t += dt;
     if (scorch.dirty && scorch.t > 0.3) { scorch.tex.needsUpdate = true; scorch.dirty = false; scorch.t = 0; }
-    if (paint.dirty) { paint.tex.needsUpdate = true; paint.dirty = false; }
+    paint.t += dt;
+    if (paint.dirty && paint.t >= 0.15) { paint.tex.needsUpdate = true; paint.dirty = false; paint.t = 0; }
   }
 }
 
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
-const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _e = new THREE.Euler(), _c = new THREE.Color(), _v = new THREE.Vector3();
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _e = new THREE.Euler(), _c = new THREE.Color(), _v = new THREE.Vector3(), _paintColor = new THREE.Color();
 const rnd = (a) => (Math.random() - 0.5) * 2 * a;
 export const CITY = { HALF, CH, GY };

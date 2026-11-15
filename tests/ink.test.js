@@ -43,3 +43,15 @@ test('teleporting the trail does not paint the space between positions', () => {
   assert.ok(contacts.length > 0);
   assert.ok(contacts.every(position => position.x > 450));
 });
+
+test('settled splashes stop repainting the same position', () => {
+  const trail = new InkTrail(new THREE.Scene(), new THREE.PerspectiveCamera());
+  const contacts = [];
+  trail.onPaint = (position) => contacts.push(position.clone());
+  const position = new THREE.Vector3(0, 20, 0), direction = new THREE.Vector3(0, 0, -1);
+  trail.update(.1, position, direction, 100, false);
+  trail.update(2, position, direction, 100, false, false);
+  const settledCount = contacts.length;
+  for (let i = 0; i < 30; i++) trail.update(.01, position, direction, 100, false, false);
+  assert.equal(contacts.length, settledCount);
+});

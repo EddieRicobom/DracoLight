@@ -63,6 +63,9 @@ test('GLB body is scaled to character height without the detached bow', async ()
   assert.ok(Math.abs(body.min.y) < 0.05);
   assert.equal(gltf.scene.getObjectByName('Object_140').visible, false);
   assert.equal(gltf.scene.getObjectByName('Object_141').visible, false);
+  const eyes = gltf.scene.getObjectByName('LeftEye_024').getWorldPosition(new THREE.Vector3());
+  const tail = gltf.scene.getObjectByName('TailRoot_03').getWorldPosition(new THREE.Vector3());
+  assert.ok(eyes.z > tail.z, 'the supplied model faces local +Z');
   player.update(1 / 60);
   for (const group of [1, 2]) {
     assert.ok(limbAverage(player, group, 1, true) < limbAverage(player, group, 1, false) - 0.002,
@@ -106,5 +109,32 @@ test('diagonal input does not exceed running speed', () => {
   const before = player.position.clone();
   player.update(0.05, { forward: 1, strafe: 1, sprint: true, yaw: 0 });
   assert.ok(player.position.distanceTo(before) <= player.runSpeed * 0.05 + 0.001);
+  player.dispose();
+});
+
+test('forward and strafe follow the chase camera at different headings', () => {
+  const player = new Boykisser(new THREE.Scene(), testCity());
+  const camera = new THREE.PerspectiveCamera();
+  const start = new THREE.Vector3(-20, 0, 20);
+  for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+    const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    camera.position.copy(start).addScaledVector(forward, -12).add(new THREE.Vector3(0, 5, 0));
+    camera.lookAt(start.clone().addScaledVector(forward, 5).add(new THREE.Vector3(0, 2.5, 0)));
+    camera.updateMatrixWorld();
+    const screenRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    screenRight.y = 0;
+    screenRight.normalize();
+    for (const [input, expected] of [
+      [{ forward: 1 }, forward],
+      [{ forward: -1 }, forward.clone().negate()],
+      [{ strafe: 1 }, screenRight],
+      [{ strafe: -1 }, screenRight.clone().negate()],
+    ]) {
+      player.teleport(start, { ground: true, yaw });
+      player.update(0.05, { ...input, yaw });
+      const delta = player.position.clone().sub(start).setY(0).normalize();
+      assert.ok(delta.dot(expected) > 0.999, `${JSON.stringify(input)} at yaw ${yaw} should match camera direction`);
+    }
+  }
   player.dispose();
 });

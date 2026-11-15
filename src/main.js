@@ -44,6 +44,10 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.2;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Rendering the entire city into a shadow map every frame is expensive. The
+// moving sun and characters still refresh several times per second.
+renderer.shadowMap.autoUpdate = false;
+renderer.shadowMap.needsUpdate = true;
 scene.add(new THREE.HemisphereLight(0x8da9d2, 0x48302e, 1.55));
 const sun = new THREE.DirectionalLight(0xffb88a, 3.2);
 sun.position.set(-180, 260, 130);
@@ -96,8 +100,8 @@ choosePaint(paintColor.value);
 const beforeCity = new Set(scene.children);
 const city = new City(scene, fx);
 const paintWorld = (position, radius, color) => {
-  city.paintSphere(position, radius, color);
-  if (position.y - radius <= 500 && Math.abs(position.x) < HALF + radius && Math.abs(position.z) < HALF + radius)
+  const changed = city.paintSphere(position, radius, color);
+  if (changed > 0)
     recordWorld({ kind: 'paint', p: position.toArray(), r: radius, color: new THREE.Color(color).getHex() });
 };
 const destroyWorld = city.destroySphere.bind(city);
@@ -399,7 +403,7 @@ function updateCamera(dt) {
   if (playerMode === 'human') {
     const direction = humanForward.set(Math.sin(yaw), 0, Math.cos(yaw));
     const focus = target.copy(human.position).addScaledVector(THREE.Object3D.DEFAULT_UP, 2.5);
-    const destination = tmp.copy(focus).addScaledVector(direction, -12).addScaledVector(THREE.Object3D.DEFAULT_UP, 5 + pitch * 5);
+    const destination = tmp.copy(focus).addScaledVector(direction, -12).addScaledVector(THREE.Object3D.DEFAULT_UP, 5 - pitch * 5);
     camera.position.lerp(destination, damp(7, dt));
     camera.lookAt(tmp2.copy(focus).addScaledVector(direction, 5));
     camera.fov += (70 - camera.fov) * damp(2.5, dt); camera.updateProjectionMatrix();
@@ -535,7 +539,14 @@ function animateRemotes(dt) {
       for (const trail of remote.trails) { trail.setColor(remote.color); trail.update(dt, a.pos, a.fwd, remote.speed, remote.speed > 300); }
     } else {
       a.position.lerp(remote.target, damp(12, dt)); a.root.position.copy(a.position); a.root.rotation.y = remote.yaw;
-      a.state = remote.motion; a._animate(dt, remote.speed);
+      a.state = remote.motion;
+      // Remote characters need smooth position interpolation, but their limb
+      // buffers do not need to be rebuilt at the display refresh rate.
+      remote.animationElapsed = (remote.animationElapsed || 0) + dt;
+      if (remote.animationElapsed >= 1 / 20) {
+        a._animate(remote.animationElapsed, remote.speed);
+        remote.animationElapsed = 0;
+      }
     }
   }
 }
@@ -602,6 +613,7 @@ function updateNetwork(dt) {
 }
 
 let qualityElapsed = 0, qualityFrames = 0, stableWindows = 0;
+let shadowElapsed = 0;
 function adaptResolution(rawDt) {
   if (document.hidden || state !== 'playing' || rawDt > 0.5) {
     qualityElapsed = 0; qualityFrames = 0; stableWindows = 0;
@@ -658,6 +670,8 @@ function frame(now) {
     U.uTime.value += dt;
   }
   updateNetwork(dt);
+  shadowElapsed += Math.min(rawDt, 0.25);
+  if (shadowElapsed >= 0.08) { renderer.shadowMap.needsUpdate = true; shadowElapsed = 0; }
   composer.render();
 }
 requestAnimationFrame(frame);

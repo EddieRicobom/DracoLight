@@ -122,6 +122,7 @@ export class InkTrail {
         size: 1.5 + Math.random() * (boosting ? 3.5 : 2.5),
         shape: Math.random(),
         color: this.color.clone(),
+        lastPaint: this.onPaint ? origin.clone() : null,
       });
     }
   }
@@ -214,7 +215,15 @@ export class InkTrail {
       for (let i = 0; i < Math.min(4, active); i++) {
         const index = (this.splashPaintCursor + i) % active;
         const at = index * 3;
-        this.onPaint(new THREE.Vector3(this.splashPositions[at], this.splashPositions[at + 1], this.splashPositions[at + 2]), 2, this.splashes[index].color);
+        const splash = this.splashes[index];
+        const x = this.splashPositions[at], y = this.splashPositions[at + 1], z = this.splashPositions[at + 2];
+        const last = splash.lastPaint;
+        // A settled splash remains visible but no longer needs to repaint the same surface.
+        if (!last || (x - last.x) ** 2 + (y - last.y) ** 2 + (z - last.z) ** 2 >= .25) {
+          const sample = new THREE.Vector3(x, y, z);
+          this.onPaint(sample, 2, splash.color);
+          if (last) last.copy(sample); else splash.lastPaint = sample.clone();
+        }
       }
       this.splashPaintCursor = (this.splashPaintCursor + 4) % active;
     }

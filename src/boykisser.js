@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { HALF } from './city.js';
+import { animateBakedParts } from './boykisser-animation.js';
 
 const DOWN = new THREE.Vector3(0, -1, 0);
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -58,6 +59,7 @@ export class Boykisser {
     if (!Number.isFinite(size.y) || size.y <= 0) throw new Error('Boykisser model has no usable height');
     const center = bounds.getCenter(new THREE.Vector3());
     this._bakeBody(model, bounds);
+    this._lastLimbSwing = undefined;
     const visual = new THREE.Group();
     visual.scale.setScalar(this.height / size.y);
     model.position.set(-center.x, -bounds.min.y, -center.z);
@@ -139,42 +141,10 @@ export class Boykisser {
   _animateLimbs(speed) {
     const stride = this.state === 'climb' ? 0.45 : this.state === 'run' ? 0.55 : this.state === 'walk' ? 0.38 : 0;
     const swing = Math.sin(this.phase) * stride;
-    const leftArm = -1.1, rightArm = 1.1;
-    for (const part of this.bakedParts) {
-      const { base, groups, influence } = part;
-      const target = part.mesh.geometry.attributes.position;
-      const values = target.array;
-      for (let i = 0; i < groups.length; i++) {
-        const group = groups[i], weight = influence[i];
-        const j = i * 3, x = base[j], y = base[j + 1], z = base[j + 2];
-        if (group === 0 || weight < 0.01) continue;
-        let px = x, py = y, pz = z;
-        if (group <= 2) {
-          const side = group === 1 ? 1 : -1;
-          const pivotX = side * this.armPivotX;
-          const dx = x - pivotX, dy = y - this.armPivotY;
-          const angle = group === 1 ? leftArm : rightArm;
-          px = pivotX + dx * Math.cos(angle) - dy * Math.sin(angle);
-          py = this.armPivotY + dx * Math.sin(angle) + dy * Math.cos(angle);
-          const bendY = py - this.armPivotY, bendZ = z - this.bodyCenterZ;
-          const armSwing = (group === 1 ? 1 : -1) * swing;
-          py = this.armPivotY + bendY * Math.cos(armSwing) - bendZ * Math.sin(armSwing);
-          pz = this.bodyCenterZ + bendY * Math.sin(armSwing) + bendZ * Math.cos(armSwing);
-        } else {
-          const side = group === 3 ? 1 : -1;
-          const pivotX = side * this.legPivotX;
-          const bendY = y - this.legPivotY, bendZ = z - this.bodyCenterZ;
-          const legSwing = (group === 3 ? -1 : 1) * swing;
-          px = pivotX + (x - pivotX);
-          py = this.legPivotY + bendY * Math.cos(legSwing) - bendZ * Math.sin(legSwing);
-          pz = this.bodyCenterZ + bendY * Math.sin(legSwing) + bendZ * Math.cos(legSwing);
-        }
-        values[j] = x + (px - x) * weight;
-        values[j + 1] = y + (py - y) * weight;
-        values[j + 2] = z + (pz - z) * weight;
-      }
-      target.needsUpdate = true;
-    }
+    // Standing still keeps the same pose; avoid touching and uploading all vertices again.
+    if (swing === this._lastLimbSwing) return;
+    this._lastLimbSwing = swing;
+    animateBakedParts(this.bakedParts, swing, this);
   }
 
   /** Move to a safe starting point. Set ground=true when changing from flight. */
@@ -246,7 +216,8 @@ export class Boykisser {
 
   /**
    * Per frame input: forward/strafe in [-1,1], sprint/jump booleans, yaw in radians.
-   * +forward follows local +Z; +strafe moves right. Returns the current movement state.
+   * +forward follows local +Z; +strafe moves to camera/model right (local -X).
+   * Returns the current movement state.
    */
   update(dt, { forward = 0, strafe = 0, sprint = false, jump = false, yaw = this.yaw } = {}) {
     dt = clamp(Number.isFinite(dt) ? dt : 0, 0, 0.05);
@@ -255,9 +226,9 @@ export class Boykisser {
     const inputLength = Math.min(1, magnitude);
     const speed = (sprint ? this.runSpeed : this.walkSpeed) * inputLength;
     this._move.set(
-      Math.sin(yaw) * forward + Math.cos(yaw) * strafe,
+      Math.sin(yaw) * forward - Math.cos(yaw) * strafe,
       0,
-      Math.cos(yaw) * forward - Math.sin(yaw) * strafe
+      Math.cos(yaw) * forward + Math.sin(yaw) * strafe
     );
     if (magnitude > 1) this._move.divideScalar(magnitude);
     this._move.multiplyScalar(speed * dt);
