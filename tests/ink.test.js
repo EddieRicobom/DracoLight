@@ -21,3 +21,25 @@ test('ink fades and expires after fifteen seconds, preserving new colors', () =>
   assert.equal(trail.points.length, 0);
   assert.equal(trail.splashes.length, 0);
 });
+
+test('new ink samples notify the world with their selected color', () => {
+  const trail = new InkTrail(new THREE.Scene(), new THREE.PerspectiveCamera());
+  const contacts = [];
+  trail.onPaint = (position, radius, color) => contacts.push({ position: position.clone(), radius, color: color.clone() });
+  trail.setColor('#00ff00');
+  trail.update(0.1, new THREE.Vector3(5, 4, 3), new THREE.Vector3(0, 0, -1), 100, false);
+  assert.ok(contacts.length > 0);
+  assert.ok(contacts.every(contact => contact.radius > 0 && contact.color.g > contact.color.r));
+});
+
+test('teleporting the trail does not paint the space between positions', () => {
+  const trail = new InkTrail(new THREE.Scene(), new THREE.PerspectiveCamera());
+  const contacts = [];
+  trail.onPaint = (position, radius) => { if (radius > 2) contacts.push(position.clone()); };
+  const direction = new THREE.Vector3(0, 0, -1);
+  trail.update(0.1, new THREE.Vector3(0, 10, 0), direction, 100, false);
+  contacts.length = 0;
+  trail.update(0.1, new THREE.Vector3(500, 10, 0), direction, 100, false);
+  assert.ok(contacts.length > 0);
+  assert.ok(contacts.every(position => position.x > 450));
+});

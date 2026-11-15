@@ -6,6 +6,11 @@ import { PaintTornado, SpiralDetector } from '../src/tornado.js';
 test('spiral makes one growing tornado, straight flight does not, and clear removes it', () => {
   const scene = new THREE.Scene();
   const effect = new PaintTornado(scene);
+  let painted = 0;
+  effect.onPaint = (position, radius, color) => {
+    assert.ok(Number.isFinite(position.x) && radius > 0 && color.isColor);
+    painted++;
+  };
   const radius = 90, dt = 1 / 30, angularSpeed = 0.8;
   for (let i = 0; i < 1500; i++) {
     const a = i * dt * angularSpeed;
@@ -13,6 +18,7 @@ test('spiral makes one growing tornado, straight flight does not, and clear remo
       new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), radius * angularSpeed, '#22aaff');
   }
   assert.equal(effect.vortices.length, 1);
+  assert.ok(painted > 0);
   assert.ok(effect.vortices[0].group.scale.x > 1);
   assert.equal(effect.vortices[0].group.children.filter((child) => child.isMesh).length, 4);
   assert.equal(effect.vortices[0].group.children.filter((child) => child.isPoints).length, 1);

@@ -122,6 +122,13 @@
     #hud.on #score{right:max(12px,env(safe-area-inset-right));top:calc(max(12px,env(safe-area-inset-top)) + 48px);bottom:auto}
   }
   .mobile-help{display:none}
+  .coop-panel{width:min(440px,100%);box-sizing:border-box;margin:0 0 14px;padding:12px 14px;border:1px solid rgba(255,221,188,.3);border-radius:12px;background:rgba(0,0,0,.25);text-align:left}
+  .coop-panel h3{margin:0 0 8px;font-size:14px}.coop-row{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+  .coop-panel input,.coop-panel button,#switchCharacter{box-sizing:border-box;min-height:38px;padding:8px 10px;border:1px solid rgba(255,221,188,.4);border-radius:8px;background:#203c44;color:#fff0d8;font:600 12px system-ui}
+  .coop-panel input{min-width:0;flex:1}.coop-panel button,#switchCharacter{cursor:pointer}.coop-panel button:hover,#switchCharacter:hover{background:#30505a}
+  .coop-panel input:focus-visible,.coop-panel button:focus-visible,#switchCharacter:focus-visible{outline:3px solid #fff0d1;outline-offset:2px}
+  #coopStatus{font-size:12px;line-height:1.4;margin:8px 0 0;overflow-wrap:anywhere} #coopRooms:empty{display:none} #switchCharacter{margin:0 0 12px}
+
 </style>
 </head>
 <body>
@@ -171,6 +178,13 @@
       <button id="clearPaint" type="button">Limpar tinta</button>
     </div>
   </fieldset>
+  <button id="switchCharacter" type="button">Jogar como personagem</button>
+  <section class="coop-panel" aria-label="Cooperativo">
+    <h3>Jogar em cooperação</h3>
+    <div class="coop-row"><input id="coopName" maxlength="24" placeholder="Seu nome" aria-label="Seu nome"><button id="coopHost" type="button">Criar sala</button><button id="coopBrowse" type="button">Procurar salas</button></div>
+    <div class="coop-row"><input id="coopCode" maxlength="12" placeholder="Código da sala" aria-label="Código da sala"><button id="coopJoin" type="button">Entrar</button><button id="coopLeave" type="button" hidden>Sair da sala</button></div>
+    <div id="coopRooms"></div><p id="coopStatus" role="status">O anfitrião controla o dragão; convidados controlam o personagem.</p>
+  </section>
   <button id="go">Carregando…</button>
   <button id="resetCity" type="button">Reconstruir cidade</button>
   <div id="status"></div>

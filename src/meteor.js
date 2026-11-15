@@ -71,6 +71,7 @@ export class PaintMeteor {
     this.balls = [];
     this.impacts = [];
     this.nextId = 1;
+    this.onPaint = null;
   }
 
   fire(pos, dir, color) {
@@ -83,7 +84,8 @@ export class PaintMeteor {
     group.position.set(pos.x, pos.y, pos.z).addScaledVector(forward, SPAWN_DISTANCE);
     this.scene.add(group);
     const ball = { id: this.nextId++, group, position: group.position, forward,
-      velocity: new THREE.Vector3(), radius: BALL_RADIUS, state: 'waiting', age: 0 };
+      velocity: new THREE.Vector3(), radius: BALL_RADIUS, state: 'waiting', age: 0,
+      color: new THREE.Color(color ?? 0x18a35d), paintTime: 0 };
     this.balls.push(ball);
     this.audio?.play?.('shot');
     return ball;
@@ -97,6 +99,11 @@ export class PaintMeteor {
     for (let i = this.balls.length - 1; i >= 0; i--) {
       const ball = this.balls[i];
       ball.age += dt;
+      ball.paintTime += dt;
+      if (this.onPaint && ball.paintTime >= 0.15) {
+        ball.paintTime = 0;
+        this.onPaint(ball.position, ball.radius, ball.color);
+      }
       if (ball.age > MAX_AGE) { this.removeBall(i); continue; }
       if (ball.state === 'waiting') {
         if (playerPath && this.crossed(ball, oldPos, playerPath)) {
@@ -147,6 +154,7 @@ export class PaintMeteor {
   startImpact(ball) {
     const center = new THREE.Vector3(ball.position.x, 0, ball.position.z);
     const radius = ball.radius * 2.5;
+    this.onPaint?.(center, radius, ball.color);
     this.impacts.push({ center, radius, slice: 0 });
     this.fx?.explosion?.(new THREE.Vector3(center.x, 2, center.z), Math.min(15, radius * 0.3));
     this.fx?.bigDust?.(center, 18);

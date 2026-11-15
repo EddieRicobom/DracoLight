@@ -10,7 +10,7 @@ Segure Shift ou o gatilho direito para impulsionar. Ao ultrapassar aproximadamen
 
 Mergulhar aumenta continuamente a velocidade; frear ou interromper um mergulho muito rápido produz uma onda de impacto.
 
-Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros, que desaparecem gradualmente após cerca de 15 segundos; use **Limpar tinta** para apagá-los antes.
+Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros, que desaparecem gradualmente após cerca de 15 segundos; use **Limpar tinta** para apagá-los antes. A tinta também colore as partes da cidade que toca; essa pintura permanece até ser limpa ou a cidade ser reconstruída.
 
 Voe em círculos na mesma direção para formar um tornado de tinta. Continuar girando faz o tornado crescer e permanecer por mais tempo; a velocidade do voo influencia sua rotação.
 
@@ -30,4 +30,10 @@ Abra no navegador o endereço informado pelo Vite. Para gerar a versão de produ
 O GitHub Actions compila e publica automaticamente alterações em `main`. Nas configurações do repositório, o GitHub Pages deve estar configurado para usar **GitHub Actions** como fonte.
 
 
-A cidade é um mundo individual: multiplayer é uma possibilidade futura e ainda não está implementado. Assets urbanos e texturas do Poly Haven são CC0; as fontes estão nos arquivos de créditos em `public/polyhaven` e `public/textures`.
+## Personagem e cooperação
+
+No menu inicial ou de pausa, selecione **Jogar como personagem** para controlar o modelo fornecido. Use W/A/S/D ou o analógico esquerdo para se mover, Shift ou o gatilho direito para correr, e Espaço ou o botão de subir para pular. Corra contra um prédio para escalá-lo. O personagem não possui tinta.
+
+Para jogar em cooperação, uma pessoa cria uma sala e compartilha o código de cinco caracteres; as demais podem digitar o código ou procurar a sala na lista. O anfitrião controla o dragão e até quatro convidados controlam o personagem. Quando o anfitrião reconstrói a cidade, ela também é reconstruída para todos os convidados, mesmo com o jogo pausado. A posição dos jogadores e as alterações recentes da cidade são sincronizadas durante a sessão. O lobby usa servidores públicos de sinalização, e os jogadores se conectam diretamente por WebRTC. Algumas redes restritas podem impedir a conexão, pois não há servidor TURN configurado.
+
+Assets urbanos e texturas do Poly Haven são CC0; as fontes estão nos arquivos de créditos em `public/polyhaven` e `public/textures`.

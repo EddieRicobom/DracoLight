@@ -31,29 +31,32 @@ const concrete = surfaceMaps('rough_concrete');
 // ------------------------------------- building material -------------------------------------
 function buildingMaterial() {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, metalness: 0.05, normalMap: concrete.normal });
+  m.userData.cityPaint = true;
   m.onBeforeCompile = (s) => {
     s.uniforms.uTime = U.uTime;
     s.uniforms.uSurfaceColor = { value: concrete.diff };
     s.uniforms.uSurfaceRough = { value: concrete.rough };
     s.vertexShader = s.vertexShader
       .replace('#include <common>', `#include <common>
-        attribute vec2 aInfo; attribute float aBurn;
-        varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn;`)
+        attribute vec2 aInfo; attribute float aBurn; attribute vec4 aPaint;
+        varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn; varying vec4 vPaint;`)
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         { mat4 im = modelMatrix;
           #ifdef USE_INSTANCING
             im = modelMatrix * instanceMatrix;
           #endif
           vWP = (im * vec4(transformed, 1.0)).xyz; vWN = normalize(mat3(im) * objectNormal); }
-        vInfo = aInfo; vBurn = aBurn;`);
+        vInfo = aInfo; vBurn = aBurn; vPaint = aPaint;`);
     s.fragmentShader = s.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform float uTime;
         uniform sampler2D uSurfaceColor; uniform sampler2D uSurfaceRough;
-        varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn;
+        varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn; varying vec4 vPaint;
+        vec4 cityPaint;
         float wLit; float wWin; float wGlass; float wFrame;
         ${GLSL_COMMON}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
+        cityPaint = vPaint;
         {
           vec3 N = normalize(vWN);
           float roof = step(0.7, N.y), bot = step(N.y, -0.7);
@@ -134,12 +137,28 @@ function buildingMaterial() {
   return m;
 }
 
+function propPaintMaterial(material) {
+  material.userData.cityPaint = true;
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 aPaint; varying vec4 vPaint;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPaint = aPaint;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec4 vPaint; vec4 cityPaint;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ncityPaint = vPaint;');
+  };
+  return material;
+}
+
 // scorch decals painted on the ground in a 1024² canvas covering the whole city
 const scorch = { canvas: null, ctx: null, tex: null, dirty: false, t: 0 };
+const paint = { canvas: null, ctx: null, tex: null, dirty: false };
 function scorchPatch(m, paving = false, maps = asphalt) {
   m.normalMap = maps.normal;
+  m.userData.cityPaint = true;
   m.onBeforeCompile = (s) => {
     s.uniforms.uScorch = { value: scorch.tex };
+    s.uniforms.uCityPaint = { value: paint.tex };
     s.uniforms.uSurfaceColor = { value: maps.diff };
     s.uniforms.uSurfaceRough = { value: maps.rough };
     s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vSW;')
@@ -149,9 +168,10 @@ function scorchPatch(m, paving = false, maps = asphalt) {
             w = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
           #endif
           vSW = w.xz; }`);
-    s.fragmentShader = s.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D uScorch; uniform sampler2D uSurfaceColor; uniform sampler2D uSurfaceRough; varying vec2 vSW;\n${GLSL_COMMON}`)
+    s.fragmentShader = s.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D uScorch; uniform sampler2D uCityPaint; uniform sampler2D uSurfaceColor; uniform sampler2D uSurfaceRough; varying vec2 vSW; vec4 cityPaint;\n${GLSL_COMMON}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         { vec2 su = (vSW + ${HALF.toFixed(1)}) / ${(2 * HALF).toFixed(1)};
+          cityPaint = (su.x >= 0. && su.x <= 1. && su.y >= 0. && su.y <= 1.) ? texture2D(uCityPaint, vec2(su.x, 1. - su.y)) : vec4(0.);
           float sc = (su.x > 0. && su.x < 1. && su.y > 0. && su.y < 1.) ? texture2D(uScorch, vec2(su.x, 1. - su.y)).r : 0.;
           float grain = .91 + .13 * vnoise(vSW * 1.2) + .06 * vnoise(vSW * 4.);
           ${paving ? `vec2 tile = fract(vSW / 2.5);
@@ -183,6 +203,7 @@ export class City {
     this.buildings = [];
     this._dirtyB = new Set(); this._collapseT = 0;
     this._buildScorch();
+    this._buildPaint();
     this._buildGround();
     this._layout();
     this._buildChunks();
@@ -198,6 +219,100 @@ export class City {
     const ctx = c.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1024, 1024);
     scorch.canvas = c; scorch.ctx = ctx; scorch.tex = new THREE.CanvasTexture(c);
     scorch.tex.colorSpace = THREE.NoColorSpace;
+  }
+  _buildPaint() {
+    const c = document.createElement('canvas'); c.width = c.height = 2048;
+    paint.canvas = c; paint.ctx = c.getContext('2d'); paint.tex = new THREE.CanvasTexture(c);
+    paint.tex.colorSpace = THREE.SRGBColorSpace;
+  }
+  // Paint survives district streaming. Color is any value accepted by THREE.Color.
+  paintSphere(position, radius, color) {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) ||
+        !Number.isFinite(position.z) || !Number.isFinite(radius) || radius <= 0) return 0;
+    // The paintable road, props and voxel buildings all lie inside this volume.
+    const edge = HALF + ROAD / 2;
+    if (position.y - radius > GY * CH || position.y + radius < 0 ||
+        position.x - radius > edge || position.x + radius < -edge ||
+        position.z - radius > edge || position.z + radius < -edge) return 0;
+    const ink = new THREE.Color(color);
+    const rgba = [ink.r, ink.g, ink.b].map(v => Math.round(clamp(v, 0, 1) * 255));
+    const x0 = Math.max(0, Math.floor((position.x - radius - OX) / CH));
+    const x1 = Math.min(GX - 1, Math.floor((position.x + radius - OX) / CH));
+    const y0 = Math.max(0, Math.floor((position.y - radius) / CH));
+    const y1 = Math.min(GY - 1, Math.floor((position.y + radius) / CH));
+    const z0 = Math.max(0, Math.floor((position.z - radius - OZ) / CH));
+    const z1 = Math.min(GZ - 1, Math.floor((position.z + radius - OZ) / CH));
+    let count = 0;
+    const rr = radius * radius;
+    for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+      const i = this.grid.get(this.gi(x, y, z));
+      if (i === undefined) continue;
+      const dx = Math.max(OX + x * CH - position.x, 0, position.x - OX - (x + 1) * CH);
+      const dy = Math.max(y * CH - position.y, 0, position.y - (y + 1) * CH);
+      const dz = Math.max(OZ + z * CH - position.z, 0, position.z - OZ - (z + 1) * CH);
+      if (dx * dx + dy * dy + dz * dz > rr) continue;
+      const o = i * 4;
+      this.paintData[o] = rgba[0]; this.paintData[o + 1] = rgba[1];
+      this.paintData[o + 2] = rgba[2]; this.paintData[o + 3] = 255;
+      const part = this.meshes[this.chunkPart[i]];
+      if (part.paintAttribute) {
+        const local = this.chunkLocal[i], target = part.paintAttribute.array, p = local * 4;
+        target[p] = rgba[0]; target[p + 1] = rgba[1]; target[p + 2] = rgba[2]; target[p + 3] = 255;
+        const d = part.paintDirty;
+        if (local < d[0]) d[0] = local; if (local > d[1]) d[1] = local;
+      }
+      count++;
+    }
+    // Props are not streamed; each mesh has one compact paint attribute per instance.
+    if (position.y - radius <= 11 && position.y + radius >= 0) {
+      const reach = radius + 4;
+      for (let gx = Math.floor((position.x - reach) / 10); gx <= Math.floor((position.x + reach) / 10); gx++)
+        for (let gz = Math.floor((position.z - reach) / 10); gz <= Math.floor((position.z + reach) / 10); gz++) {
+          const ids = this.propHash.get(`${gx},${gz}`);
+          if (!ids) continue;
+          for (const id of ids) {
+            const prop = this.props[id]; if (!prop.alive) continue;
+            const width = prop.type === 0 ? 3.5 : prop.type === 2 ? 2.5 : 0.8;
+            const bottom = prop.type === 0 ? 0 : 0.3, top = prop.type === 0 ? 10 : prop.type === 1 ? 8.5 : 2;
+            const dx = Math.max(0, Math.abs(prop.x - position.x) - width);
+            const dz = Math.max(0, Math.abs(prop.z - position.z) - width);
+            const dy = Math.max(bottom - position.y, 0, position.y - top);
+            if (dx * dx + dy * dy + dz * dz > rr) continue;
+            for (let part = 0; part < this.propPaintAttrs[prop.type].length; part++) {
+              if (prop.type === 0 && ((part === 0 && position.y - radius > 5) || (part === 1 && position.y + radius < 3))) continue;
+              const attr = this.propPaintAttrs[prop.type][part], o = prop.idx * 4;
+              attr.array[o] = rgba[0]; attr.array[o + 1] = rgba[1];
+              attr.array[o + 2] = rgba[2]; attr.array[o + 3] = 255;
+              attr.needsUpdate = true;
+            }
+            count++;
+          }
+        }
+    }
+    if (position.y - radius <= 0 && position.y + radius >= 0) {
+      const groundRadius = Math.sqrt(Math.max(0, rr - position.y * position.y));
+      const scale = paint.canvas.width / (2 * HALF);
+      const px = (position.x + HALF) * scale, pz = (position.z + HALF) * scale;
+      if (groundRadius > 0 && px + groundRadius * scale >= 0 && px - groundRadius * scale <= paint.canvas.width &&
+          pz + groundRadius * scale >= 0 && pz - groundRadius * scale <= paint.canvas.height) {
+        paint.ctx.fillStyle = `#${ink.getHexString(THREE.SRGBColorSpace)}`;
+        paint.ctx.beginPath(); paint.ctx.arc(px, pz, groundRadius * scale, 0, Math.PI * 2); paint.ctx.fill();
+        paint.dirty = true;
+      }
+    }
+    return count;
+  }
+  clearPaint() {
+    this.paintData.fill(0);
+    for (const part of this.meshes) if (part.paintAttribute) {
+      part.paintAttribute.array.fill(0);
+      part.paintDirty = [0, part.ids.length - 1];
+    }
+    for (const group of this.propPaintAttrs) for (const attr of group) {
+      attr.array.fill(0); attr.needsUpdate = true;
+    }
+    paint.ctx.clearRect(0, 0, paint.canvas.width, paint.canvas.height);
+    paint.tex.needsUpdate = true; paint.dirty = false;
   }
   paintScorch(x, z, r, a = 0.7) {
     const px = ((x + HALF) / (2 * HALF)) * 1024, pz = ((z + HALF) / (2 * HALF)) * 1024, pr = (r / (2 * HALF)) * 1024;
@@ -360,6 +475,7 @@ export class City {
     const mat = buildingMaterial();
     this.cx = new Int16Array(n); this.cy = new Int16Array(n); this.cz = new Int16Array(n);
     this.cb = new Int32Array(n); this.hp = new Float32Array(n); this.alive = new Uint8Array(n);
+    this.paintData = new Uint8Array(n * 4);
     const districtCount = NB / DISTRICT_BLOCKS;
     const districtCells = Array.from({ length: districtCount * districtCount }, () => []);
     for (let i = 0; i < n; i++) {
@@ -373,7 +489,8 @@ export class City {
     const m = new THREE.Matrix4(), c = new THREE.Color();
     for (let part = 0; part < districtCells.length; part++) {
       const ids = districtCells[part];
-      this.meshes.push({ ids, mesh: null, burnAttribute: null, matrixDirty: [Infinity, -1], burnDirty: [Infinity, -1] });
+      this.meshes.push({ ids, mesh: null, burnAttribute: null, paintAttribute: null,
+        matrixDirty: [Infinity, -1], burnDirty: [Infinity, -1], paintDirty: [Infinity, -1] });
       for (let local = 0; local < ids.length; local++) {
         const i = ids[local]; this.chunkPart[i] = part; this.chunkLocal[i] = local;
         const x = cells[i * 4], y = cells[i * 4 + 1], z = cells[i * 4 + 2], b = cells[i * 4 + 3];
@@ -408,13 +525,17 @@ export class City {
     if (P.mesh || !ids.length) return;
     const geo = new THREE.BoxGeometry(CH, CH, CH);
     const info = new Float32Array(ids.length * 2), burn = new Float32Array(ids.length);
+    const color = new Uint8Array(ids.length * 4);
     const mesh = new THREE.InstancedMesh(geo, this.buildMat, ids.length);
     mesh.castShadow = mesh.receiveShadow = true;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     const burnAttribute = new THREE.InstancedBufferAttribute(burn, 1);
+    const paintAttribute = new THREE.InstancedBufferAttribute(color, 4, true);
     burnAttribute.setUsage(THREE.DynamicDrawUsage);
+    paintAttribute.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 2));
     geo.setAttribute('aBurn', burnAttribute);
+    geo.setAttribute('aPaint', paintAttribute);
     const m = new THREE.Matrix4(), c = new THREE.Color();
     for (let local = 0; local < ids.length; local++) {
       const i = ids[local], x = this.cx[i], y = this.cy[i], z = this.cz[i], b = this.cb[i];
@@ -427,18 +548,19 @@ export class City {
       mesh.setColorAt(local, c);
       info[local * 2] = L.style; info[local * 2 + 1] = L.seed;
       burn[local] = this.burnAttr.array[i];
+      color.set(this.paintData.subarray(i * 4, i * 4 + 4), local * 4);
     }
     mesh.computeBoundingSphere();
     this.scene.add(mesh);
-    P.mesh = mesh; P.burnAttribute = burnAttribute;
-    P.matrixDirty = [Infinity, -1]; P.burnDirty = [Infinity, -1];
+    P.mesh = mesh; P.burnAttribute = burnAttribute; P.paintAttribute = paintAttribute;
+    P.matrixDirty = [Infinity, -1]; P.burnDirty = [Infinity, -1]; P.paintDirty = [Infinity, -1];
     if (P.proxy) P.proxy.visible = false;
   }
   _unloadDistrict(part) {
     const P = this.meshes[part]; if (!P.mesh) return;
     this.scene.remove(P.mesh);
     P.mesh.geometry.dispose(); P.mesh.dispose();
-    P.mesh = null; P.burnAttribute = null;
+    P.mesh = null; P.burnAttribute = null; P.paintAttribute = null;
     if (P.proxy) { P.proxy.visible = true; P.proxyDirty = true; }
   }
   _refreshProxy(P) {
@@ -536,8 +658,8 @@ export class City {
       for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i); const n = 1 + 0.22 * Math.sin(v.x * 2.1 + v.y * 1.3) * Math.cos(v.z * 1.7 - v.y); v.multiplyScalar(n); v.y *= 0.8; a.setXYZ(i, v.x, v.y + 5.4, v.z); }
       g.computeVertexNormals(); return g;
     })();
-    const trunk = new THREE.InstancedMesh(trunkG, new THREE.MeshStandardMaterial({ color: 0x3b2a20, roughness: 1 }), trees.length);
-    const crown = new THREE.InstancedMesh(crownG, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 }), trees.length);
+    const trunk = new THREE.InstancedMesh(trunkG, propPaintMaterial(new THREE.MeshStandardMaterial({ color: 0x3b2a20, roughness: 1 })), trees.length);
+    const crown = new THREE.InstancedMesh(crownG, propPaintMaterial(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 })), trees.length);
     const leaf = [[0.78, 0.28, 0.22], [0.87, 0.42, 0.25], [0.92, 0.62, 0.32], [0.68, 0.30, 0.30], [0.88, 0.51, 0.30]];
     trees.forEach(([x, z, sc], i) => {
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), R() * 6.28); s.setScalar(sc * 1.2);
@@ -551,8 +673,8 @@ export class City {
     // street lamps
     const poleG = new THREE.CylinderGeometry(0.1, 0.14, 8, 6).translate(0, 4, 0);
     const headG = new THREE.BoxGeometry(0.5, 0.25, 1.4).translate(0, 8, 0.5);
-    const pole = new THREE.InstancedMesh(poleG, new THREE.MeshStandardMaterial({ color: 0x222428, roughness: 0.5, metalness: 0.6 }), lamps.length);
-    const head = new THREE.InstancedMesh(headG, new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xffc27a, emissiveIntensity: 5 }), lamps.length);
+    const pole = new THREE.InstancedMesh(poleG, propPaintMaterial(new THREE.MeshStandardMaterial({ color: 0x222428, roughness: 0.5, metalness: 0.6 })), lamps.length);
+    const head = new THREE.InstancedMesh(headG, propPaintMaterial(new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xffc27a, emissiveIntensity: 5 })), lamps.length);
     lamps.forEach(([x, z], i) => {
       // point the lamp head at the road
       const bx = ((x - OX) % PITCH + PITCH) % PITCH, bz = ((z - OZ) % PITCH + PITCH) % PITCH;
@@ -573,7 +695,7 @@ export class City {
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
       return g;
     })();
-    const car = new THREE.InstancedMesh(carG, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.6 }), cars.length);
+    const car = new THREE.InstancedMesh(carG, propPaintMaterial(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.6 })), cars.length);
     const carCols = [[0.75, 0.26, 0.23], [0.88, 0.85, 0.76], [0.18, 0.27, 0.3], [0.25, 0.49, 0.55], [0.58, 0.65, 0.63], [0.91, 0.68, 0.31]];
     cars.forEach(([x, z, a, r], i) => {
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), a); m.compose(p.set(x, 0, z), q, s.setScalar(1)); car.setMatrixAt(i, m);
@@ -582,6 +704,12 @@ export class City {
     });
     car.castShadow = true; car.receiveShadow = true; this.scene.add(car);
     this.propMeshes = [[trunk, crown], [pole, head], [car]];
+    this.propPaintAttrs = this.propMeshes.map(group => group.map(mesh => {
+      const attr = new THREE.InstancedBufferAttribute(new Uint8Array(mesh.count * 4), 4, true);
+      attr.setUsage(THREE.DynamicDrawUsage);
+      mesh.geometry.setAttribute('aPaint', attr);
+      return attr;
+    }));
     this.propInitialMatrices = this.propMeshes.map(group => group.map(mesh => new Float32Array(mesh.instanceMatrix.array)));
     this.carCols = cars.map(([, , , r]) => carCols[(r * carCols.length) | 0]);
   }
@@ -800,6 +928,7 @@ export class City {
   }
   // Restore the original city in place, including districts currently represented by proxies.
   reset() {
+    this.clearPaint();
     this.grid.clear();
     const burn = this.burnAttr.array;
     burn.fill(0);
@@ -948,6 +1077,7 @@ export class City {
     const info = new Float32Array(n * 2), burn = new Float32Array(n);
     geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 2));
     geo.setAttribute('aBurn', new THREE.InstancedBufferAttribute(burn, 1));
+    geo.setAttribute('aPaint', new THREE.InstancedBufferAttribute(new Uint8Array(n * 4), 4, true));
     const mesh = new THREE.InstancedMesh(geo, this.buildMat, n);
     const m = new THREE.Matrix4(), c = new THREE.Color();
     for (let i = 0; i < n; i++) {
@@ -969,7 +1099,7 @@ export class City {
     if (this._dirtyB.size && this._collapseT > 0.12) { this._collapseT = 0; this._collapse(); }
     this._updateDebris(dt);
     for (const part of this.meshes) {
-      const m = part.matrixDirty, b = part.burnDirty;
+      const m = part.matrixDirty, b = part.burnDirty, p = part.paintDirty;
       if (part.mesh && m[1] >= 0) {
         const a = part.mesh.instanceMatrix; a.clearUpdateRanges();
         a.addUpdateRange(m[0] * 16, (m[1] - m[0] + 1) * 16); a.needsUpdate = true;
@@ -980,9 +1110,15 @@ export class City {
         a.addUpdateRange(b[0], b[1] - b[0] + 1); a.needsUpdate = true;
         b[0] = Infinity; b[1] = -1;
       }
+      if (part.mesh && p[1] >= 0) {
+        const a = part.paintAttribute; a.clearUpdateRanges();
+        a.addUpdateRange(p[0] * 4, (p[1] - p[0] + 1) * 4); a.needsUpdate = true;
+        p[0] = Infinity; p[1] = -1;
+      }
     }
     scorch.t += dt;
     if (scorch.dirty && scorch.t > 0.3) { scorch.tex.needsUpdate = true; scorch.dirty = false; scorch.t = 0; }
+    if (paint.dirty) { paint.tex.needsUpdate = true; paint.dirty = false; }
   }
 }
 

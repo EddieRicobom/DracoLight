@@ -91,6 +91,7 @@ export class PaintTornado {
     this.scene = scene;
     this.detector = new SpiralDetector();
     this.vortices = [];
+    this.onPaint = null;
   }
   update(dt, pos, forward, speed, color) {
     if (!(dt > 0) || !Number.isFinite(dt)) return;
@@ -109,6 +110,21 @@ export class PaintTornado {
       const fade = Math.min(1, v.age * 2, (v.life - v.age) / 2);
       for (const material of v.ribbonMaterials) material.opacity = 0.78 * fade;
       v.dropMaterial.uniforms.opacity.value = 0.85 * fade;
+      v.paintTime = (v.paintTime || 0) + dt;
+      if (this.onPaint && v.paintTime >= 0.2) {
+        v.paintTime = 0;
+        const tint = v.dropMaterial.uniforms.tint.value;
+        for (let sample = 0; sample < 8; sample++) {
+          const t = ((v.paintCursor || 0) + sample * 11) % RIBBON_STEPS / RIBBON_STEPS;
+          const r = v.baseRadius * (0.10 + 0.90 * t ** 1.35) * v.group.scale.x;
+          const a = v.group.rotation.y + t * Math.PI * 11 + (sample % RIBBONS) * Math.PI * 2 / RIBBONS;
+          const position = new THREE.Vector3(v.group.position.x + Math.cos(a) * r,
+            v.group.position.y + t * v.baseHeight * v.group.scale.y,
+            v.group.position.z + Math.sin(a) * r);
+          this.onPaint(position, 9, tint);
+        }
+        v.paintCursor = ((v.paintCursor || 0) + 17) % RIBBON_STEPS;
+      }
     }
   }
   spawn(spiral, color) {
@@ -138,7 +154,7 @@ export class PaintTornado {
     const baseY = spiral.y - height * 0.5;
     group.position.set(spiral.x, baseY, spiral.z);
     this.scene.add(group);
-    this.vortices.push({ group, ribbonMaterials, dropMaterial, age: 0, life: Math.min(30, 8 + duration * 1.5), direction: spiral.direction, generation: spiral.generation, baseRadius: radius, baseY, rotationSpeed: this.rotationSpeed(spiral.flightSpeed) });
+    this.vortices.push({ group, ribbonMaterials, dropMaterial, age: 0, life: Math.min(30, 8 + duration * 1.5), direction: spiral.direction, generation: spiral.generation, baseRadius: radius, baseHeight: height, baseY, rotationSpeed: this.rotationSpeed(spiral.flightSpeed) });
   }
   rotationSpeed(flightSpeed) { return THREE.MathUtils.clamp(flightSpeed * 0.012, 0.2, 4); }
   grow(v, spiral, color) {

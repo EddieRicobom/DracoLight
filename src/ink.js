@@ -9,6 +9,7 @@ export class InkTrail {
     this.color = new THREE.Color(0x092d1c);
     this.points = [];
     this.splashes = [];
+    this.onPaint = null;
     this.maxPoints = 2048;
     this.maxSplashes = 512;
     this.lifetime = 15;
@@ -109,6 +110,7 @@ export class InkTrail {
       origin.x += (Math.random() - .5) * spread;
       origin.y += (Math.random() - .5) * spread;
       origin.z += (Math.random() - .5) * spread;
+      this.onPaint?.(origin, 2, this.color);
       this.splashes.push({
         origin,
         velocity: new THREE.Vector3(
@@ -124,11 +126,22 @@ export class InkTrail {
     }
   }
 
-  update(dt, position, direction, speed, boosting) {
+  update(dt, position, direction, speed, boosting, emit = true) {
     this.clock += dt;
     this.offset.crossVectors(direction, THREE.Object3D.DEFAULT_UP).normalize().multiplyScalar(this.lateralOffset);
     const tail = position.clone().addScaledVector(direction, -8).add(this.offset);
-    if (!this.points.length || tail.distanceToSquared(this.points[this.points.length - 1].position) > 100) {
+    if (emit && (!this.points.length || tail.distanceToSquared(this.points[this.points.length - 1].position) > 100)) {
+      const previous = this.points[this.points.length - 1];
+      if (this.onPaint) {
+        const distance = previous ? previous.position.distanceTo(tail) : 0;
+        // Match the ribbon's gap handling: a teleport must not paint a long streak.
+        const continuous = previous && distance <= 80;
+        const steps = continuous ? Math.min(24, Math.max(1, Math.ceil(distance / 6))) : 1;
+        for (let i = 1; i <= steps; i++) {
+          const sample = continuous ? previous.position.clone().lerp(tail, i / steps) : tail;
+          this.onPaint(sample, boosting ? 5 : 3.5, this.color);
+        }
+      }
       this.points.push({
         position: tail,
         born: this.clock,
@@ -196,6 +209,15 @@ export class InkTrail {
       active++;
     }
     this.splashes.length = active;
+    if (this.onPaint && active) {
+      this.splashPaintCursor = this.splashPaintCursor || 0;
+      for (let i = 0; i < Math.min(4, active); i++) {
+        const index = (this.splashPaintCursor + i) % active;
+        const at = index * 3;
+        this.onPaint(new THREE.Vector3(this.splashPositions[at], this.splashPositions[at + 1], this.splashPositions[at + 2]), 2, this.splashes[index].color);
+      }
+      this.splashPaintCursor = (this.splashPaintCursor + 4) % active;
+    }
     this.splashMesh.geometry.setDrawRange(0, active);
     for (const attribute of Object.values(this.splashMesh.geometry.attributes)) attribute.needsUpdate = true;
   }

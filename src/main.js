@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GameAudio } from './audio.js';
 import { Dragon, PALETTES } from './dragon.js';
+import { Boykisser } from './boykisser.js';
+import { createCoop } from './coop.js';
 import { City, HALF } from './city.js';
 import { createUrbanDetails } from './urban.js';
 import { createPolyProps } from './polyprops.js';
@@ -16,6 +18,7 @@ import { clamp, damp, turnToward, U } from './util.js';
 import { createSky, createVisualPipeline } from './visual.js';
 
 const $ = (id) => document.getElementById(id);
+let recordWorld = () => {};
 const canvas = $('c'), menu = $('menu'), hud = $('hud'), go = $('go');
 const audio = new GameAudio();
 const soundButton = $('sound');
@@ -85,11 +88,27 @@ $('clearPaint').addEventListener('click', () => {
   inkLeft.clear();
   inkRight.clear();
   tornado.clear();
+  city.clearPaint();
+  recordWorld({ kind: 'clear' });
   $('status').textContent = 'Tinta removida.';
 });
 choosePaint(paintColor.value);
 const beforeCity = new Set(scene.children);
 const city = new City(scene, fx);
+const paintWorld = (position, radius, color) => {
+  city.paintSphere(position, radius, color);
+  if (position.y - radius <= 500 && Math.abs(position.x) < HALF + radius && Math.abs(position.z) < HALF + radius)
+    recordWorld({ kind: 'paint', p: position.toArray(), r: radius, color: new THREE.Color(color).getHex() });
+};
+const destroyWorld = city.destroySphere.bind(city);
+city.destroySphere = (position, radius, power, maxN) => {
+  const count = destroyWorld(position, radius, power, maxN);
+  if (count > 0) recordWorld({ kind: 'destroy', p: position.toArray(), r: radius, power, maxN });
+  return count;
+};
+inkLeft.onPaint = paintWorld;
+inkRight.onPaint = paintWorld;
+tornado.onPaint = paintWorld;
 const urban = createUrbanDetails(scene, city);
 const polyProps = createPolyProps(scene, city);
 for (const item of scene.children) if (!beforeCity.has(item)) makeMonochrome(item);
@@ -97,9 +116,11 @@ polyProps.ready.then(() => {
   for (const item of scene.children) if (item.name.startsWith('Poly Haven ')) makeMonochrome(item);
 });
 const meteor = new PaintMeteor(scene, city, fx, audio);
+meteor.onPaint = paintWorld;
 const resetButton = $('resetCity');
 resetButton.addEventListener('click', () => {
   city.reset();
+  recordWorld({ kind: 'reset' });
   urban.reset();
   polyProps.reset();
   fx.burning.length = 0;
@@ -127,6 +148,35 @@ const FLIGHT = Object.freeze({
   boostDrain: 20,
   recovery: 18,
 });
+const human = new Boykisser(scene, city, { position: new THREE.Vector3(0, 0, 115), yaw: Math.PI });
+human.root.visible = false;
+let playerMode = 'dragon';
+let humanReady = false;
+const humanLoading = human.load().then(() => { humanReady = true; }).catch((error) => {
+  console.error('Não foi possível carregar o personagem:', error);
+  $('status').textContent = 'Não foi possível carregar o personagem.';
+});
+const switchButton = $('switchCharacter');
+function setPlayerMode(mode) {
+  if (mode === playerMode) return;
+  if (mode === 'human' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return; }
+  if (mode === 'human') {
+    human.teleport(player.pos, { ground: true, yaw });
+    human.root.visible = true; player.setVisible(false);
+    tornado.detector.reset();
+  } else {
+    player.pos.copy(human.position).add(new THREE.Vector3(0, 15, 0));
+    player.fwd.set(Math.sin(yaw), 0, Math.cos(yaw));
+    player.resetTrail(); player.update(0, elapsed);
+    player.setVisible(true); human.root.visible = false;
+    speed = FLIGHT.cruise;
+  }
+  playerMode = mode;
+  switchButton.textContent = mode === 'dragon' ? 'Jogar como personagem' : 'Jogar como dragão';
+  $('touchPaint').style.display = mode === 'dragon' ? '' : 'none';
+  $('touchAscend').textContent = mode === 'dragon' ? 'Subir' : 'Pular';
+}
+switchButton.addEventListener('click', () => setPlayerMode(playerMode === 'dragon' ? 'human' : 'dragon'));
 let state = 'menu', elapsed = 0, stamina = 100;
 let yaw = Math.PI, pitch = 0, speed = FLIGHT.cruise;
 let actualSpeed = FLIGHT.cruise;
@@ -205,9 +255,9 @@ Promise.resolve().then(() => {
 });
 go.addEventListener('click', start);
 function firePaint() {
-  if (state === 'playing') meteor.fire(player.pos, player.fwd, paintColor.value);
+  if (state === 'playing' && playerMode === 'dragon') meteor.fire(player.pos, player.fwd, paintColor.value);
 }
-canvas.addEventListener('contextmenu', (event) => { event.preventDefault(); firePaint(); });
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('click', () => {
   if (!touchDevice && state === 'playing' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.()?.catch?.(() => {});
 });
@@ -233,6 +283,9 @@ canvas.addEventListener('pointerdown', (e) => {
   if (state !== 'playing' || e.button !== 0) return;
   draggingMouse = true;
   canvas.setPointerCapture?.(e.pointerId);
+});
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 2) { e.preventDefault(); firePaint(); }
 });
 canvas.addEventListener('pointerup', () => { draggingMouse = false; });
 canvas.addEventListener('pointercancel', () => { draggingMouse = false; });
@@ -323,7 +376,39 @@ function updateFlight(dt, pad) {
   meteor.update(dt, old, player.pos, actualSpeed);
 }
 
+function updateHuman(dt, pad) {
+  yaw -= (stick(pad?.axes[2]) + touch.state.rightX) * dt * 2.4;
+  pitch = clamp(pitch - (stick(pad?.axes[3]) + touch.state.rightY) * dt * 1.6, -0.55, 0.8);
+  const forward = clamp((keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) - stick(pad?.axes[1]) - touch.state.leftY, -1, 1);
+  const strafe = clamp((keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) + stick(pad?.axes[0]) + touch.state.leftX, -1, 1);
+  old.copy(human.position);
+  human.update(dt, { forward, strafe, yaw, sprint: keys.has('ShiftLeft') || keys.has('ShiftRight') || buttonDown(pad, 7) || touch.state.boost,
+    jump: keys.has('Space') || buttonDown(pad, 0) || touch.state.ascend });
+  actualSpeed = dt > 0 ? old.distanceTo(human.position) / dt : 0;
+  audio.setFlight(0, false);
+  fx.updateSpeed(dt, human.position, humanForward.set(Math.sin(yaw), 0, Math.cos(yaw)), 0, false);
+  // Existing paint and meteors continue to age, but the character cannot make new ones.
+  inkLeft.update(dt, player.pos, player.fwd, 0, false, false);
+  inkRight.update(dt, player.pos, player.fwd, 0, false, false);
+  tornado.update(dt, human.position, humanForward, 0, paintColor.value);
+  meteor.update(dt, null, null, 0);
+}
+const humanForward = new THREE.Vector3();
+function activePosition() { return playerMode === 'dragon' ? player.pos : human.position; }
 function updateCamera(dt) {
+  if (playerMode === 'human') {
+    const direction = humanForward.set(Math.sin(yaw), 0, Math.cos(yaw));
+    const focus = target.copy(human.position).addScaledVector(THREE.Object3D.DEFAULT_UP, 2.5);
+    const destination = tmp.copy(focus).addScaledVector(direction, -12).addScaledVector(THREE.Object3D.DEFAULT_UP, 5 + pitch * 5);
+    camera.position.lerp(destination, damp(7, dt));
+    camera.lookAt(tmp2.copy(focus).addScaledVector(direction, 5));
+    camera.fov += (70 - camera.fov) * damp(2.5, dt); camera.updateProjectionMatrix();
+    fx.setScale(innerHeight * renderer.getPixelRatio(), camera.fov);
+    sun.position.set(human.position.x - 180, human.position.y + 260, human.position.z + 130);
+    sun.target.position.copy(human.position); sun.target.updateMatrixWorld();
+    sky.position.copy(camera.position); sky.updateAltitude?.(human.position.y, elapsed);
+    return;
+  }
   const back = tmp.copy(player.fwd).multiplyScalar(-48 - clamp(speed / 90, 0, 12));
   const elevated = target.copy(player.pos).add(back).addScaledVector(THREE.Object3D.DEFAULT_UP, 22);
   camera.position.lerp(elevated, damp(5.5, dt));
@@ -342,13 +427,177 @@ function updateCamera(dt) {
 function updateHud(dt) {
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
-  readouts.textContent = `Velocidade: ${Math.round(actualSpeed * 3.6).toLocaleString('pt-BR')} km/h · Altitude: ${Math.round(player.pos.y).toLocaleString('pt-BR')} m`;
+  readouts.textContent = `Velocidade: ${Math.round(actualSpeed * 3.6).toLocaleString('pt-BR')} km/h · Altitude: ${Math.round(activePosition().y).toLocaleString('pt-BR')} m`;
   fpsTime += dt;
   frames++;
   if (fpsTime > 0.5) {
     $('fps').textContent = `${Math.round(frames / fpsTime)} FPS`;
     fpsTime = 0;
     frames = 0;
+  }
+}
+
+// The host owns the city; guests send movement only and receive city changes.
+const remotes = new Map();
+const worldHistory = [], worldQueue = [];
+let applyingWorld = false, networkTime = 0, worldTime = 0;
+const coop = createCoop({
+  onStatus: (message) => { $('coopStatus').textContent = message; },
+  onRooms: (rooms) => {
+    const list = $('coopRooms'); list.replaceChildren();
+    for (const room of rooms) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = `${room.name} · ${room.count}/${room.max} · ${room.code}`;
+      button.addEventListener('click', () => { $('coopCode').value = room.code; joinRoom(); });
+      list.append(button);
+    }
+  },
+  onPeer: ({ id, connected }) => {
+    if (!connected) {
+      removeRemote(id);
+      if (coop.role === 'host') coop.broadcast({ type: 'depart', id });
+      else if (coop.role === 'guest') { for (const key of [...remotes.keys()]) removeRemote(key); }
+      return;
+    }
+    if (coop.role === 'host') {
+      coop.sendTo(id, { type: 'world', events: [{ kind: 'reset' }] });
+      for (let i = 0; i < worldHistory.length; i += 30)
+        coop.sendTo(id, { type: 'world', events: worldHistory.slice(i, i + 30) });
+    }
+  },
+  onMessage: (message, peerId) => {
+    if (message.type === 'state') {
+      if (!validState(message)) return;
+      if (coop.role === 'host') {
+        // A guest can only present itself as a ground character.
+        message = { ...message, id: peerId, mode: 'human' };
+        coop.broadcast(message, peerId);
+      } else if (typeof message.id !== 'string' || message.id === coop.id) return;
+      updateRemote(message);
+    } else if (message.type === 'depart' && coop.role === 'guest' && typeof message.id === 'string') {
+      removeRemote(message.id);
+    } else if (message.type === 'world' && coop.role === 'guest' && Array.isArray(message.events)) {
+      applyingWorld = true;
+      try { for (const event of message.events.slice(0, 60)) applyWorld(event); }
+      finally { applyingWorld = false; }
+    }
+  },
+});
+function validState(m) {
+  return Array.isArray(m.p) && m.p.length === 3 && m.p.every(v => Number.isFinite(v) && Math.abs(v) < 30000)
+    && Number.isFinite(m.yaw) && (m.mode === 'dragon' || m.mode === 'human');
+}
+function removeRemote(id) {
+  const remote = remotes.get(id); if (!remote) return;
+  if (remote.mode === 'human') remote.actor.dispose();
+  else {
+    const actor = remote.actor;
+    for (const object of [actor.body, actor.head, actor.spines, actor.mane, ...actor.legs.map(leg => leg.g)]) scene.remove(object);
+    for (const trail of remote.trails) {
+      scene.remove(trail.mesh, trail.splashMesh);
+      trail.mesh.geometry.dispose(); trail.mesh.material.dispose();
+      trail.splashMesh.geometry.dispose(); trail.splashMesh.material.dispose();
+    }
+  }
+  remotes.delete(id);
+}
+function updateRemote(message) {
+  let remote = remotes.get(message.id);
+  if (remote && remote.mode !== message.mode) { removeRemote(message.id); remote = null; }
+  if (!remote) {
+    if (remotes.size >= 5) return;
+    if (message.mode === 'dragon') {
+      const actor = new Dragon(scene, PALETTES.red);
+      actor.pos.fromArray(message.p); actor.fwd.set(Math.sin(message.yaw), 0, Math.cos(message.yaw)); actor.resetTrail();
+      remote = { mode: 'dragon', actor, target: new THREE.Vector3().fromArray(message.p), yaw: message.yaw, trails: [new InkTrail(scene, camera, -9), new InkTrail(scene, camera, 9)] };
+    } else {
+      const actor = new Boykisser(scene, city);
+      actor.root.visible = false;
+      actor.load().then(() => { if (remotes.get(message.id)?.actor === actor) actor.root.visible = true; }).catch(console.error);
+      remote = { mode: 'human', actor, target: new THREE.Vector3().fromArray(message.p), yaw: message.yaw };
+      actor.position.copy(remote.target);
+    }
+    remotes.set(message.id, remote);
+  }
+  remote.target.fromArray(message.p); remote.yaw = message.yaw;
+  remote.pitch = Number.isFinite(message.pitch) ? clamp(message.pitch, -1.35, 1.35) : 0;
+  remote.speed = Number.isFinite(message.speed) ? clamp(message.speed, 0, 5000) : 0;
+  remote.color = typeof message.color === 'string' && /^#[0-9a-f]{6}$/i.test(message.color) ? message.color : '#ef4444';
+  remote.motion = ['idle', 'walk', 'run', 'climb', 'air'].includes(message.motion) ? message.motion : 'idle';
+}
+function animateRemotes(dt) {
+  for (const remote of remotes.values()) {
+    const a = remote.actor;
+    if (remote.mode === 'dragon') {
+      a.pos.lerp(remote.target, damp(10, dt));
+      a.fwd.set(Math.sin(remote.yaw) * Math.cos(remote.pitch), Math.sin(remote.pitch), Math.cos(remote.yaw) * Math.cos(remote.pitch));
+      a.flightSpeed = remote.speed; a.update(dt, elapsed);
+      for (const trail of remote.trails) { trail.setColor(remote.color); trail.update(dt, a.pos, a.fwd, remote.speed, remote.speed > 300); }
+    } else {
+      a.position.lerp(remote.target, damp(12, dt)); a.root.position.copy(a.position); a.root.rotation.y = remote.yaw;
+      a.state = remote.motion; a._animate(dt, remote.speed);
+    }
+  }
+}
+function applyWorld(event) {
+  if (!event || typeof event.kind !== 'string') return;
+  if (event.kind === 'reset') { city.reset(); urban.reset(); polyProps.reset(); fx.burning.length = 0; meteor.reset(); $('sc').textContent = '0'; $('coopStatus').textContent = 'Cidade reconstruída pelo anfitrião.'; return; }
+  if (event.kind === 'clear') { city.clearPaint(); return; }
+  if (!Array.isArray(event.p) || event.p.length !== 3 || !event.p.every(v => Number.isFinite(v) && Math.abs(v) < 30000)
+      || !Number.isFinite(event.r) || event.r <= 0 || event.r > 100) return;
+  const p = new THREE.Vector3().fromArray(event.p);
+  if (event.kind === 'paint' && Number.isInteger(event.color) && event.color >= 0 && event.color <= 0xffffff)
+    city.paintSphere(p, event.r, event.color);
+  if (event.kind === 'destroy') destroyWorld(p, event.r, clamp(Number(event.power) || 25, 0, 100), clamp(Number(event.maxN) || 400, 1, 400));
+}
+recordWorld = (event) => {
+  if (applyingWorld || coop.role === 'guest') return;
+  if (event.kind === 'reset') { worldHistory.length = 0; worldQueue.length = 0; }
+  if (event.kind === 'clear') {
+    for (let i = worldHistory.length - 1; i >= 0; i--) if (worldHistory[i].kind === 'paint') worldHistory.splice(i, 1);
+    for (let i = worldQueue.length - 1; i >= 0; i--) if (worldQueue[i].kind === 'paint') worldQueue.splice(i, 1);
+  }
+  worldHistory.push(event);
+  if (coop.role === 'host') {
+    if (event.kind === 'reset' || event.kind === 'clear') {
+      while (worldQueue.length) coop.send({ type: 'world', events: worldQueue.splice(0, 30) });
+      coop.send({ type: 'world', events: [event] });
+    } else worldQueue.push(event);
+  }
+  if (worldHistory.length > 5000) worldHistory.shift();
+};
+function setRoomControls() {
+  const inRoom = !!coop.role, guest = coop.role === 'guest';
+  $('coopLeave').hidden = !inRoom; $('switchCharacter').disabled = inRoom;
+  $('resetCity').disabled = guest; $('clearPaint').disabled = guest;
+}
+function joinRoom() {
+  if (!humanReady) { $('coopStatus').textContent = 'Aguarde o personagem carregar.'; return; }
+  if (coop.join($('coopCode').value, $('coopName').value)) {
+    setPlayerMode('human'); setRoomControls();
+  }
+}
+$('coopHost').addEventListener('click', () => {
+  if (coop.host($('coopName').value)) { setPlayerMode('dragon'); setRoomControls(); }
+});
+$('coopJoin').addEventListener('click', joinRoom);
+$('coopBrowse').addEventListener('click', () => { coop.watchRooms(); $('coopStatus').textContent = 'Procurando salas abertas…'; });
+$('coopLeave').addEventListener('click', () => {
+  coop.leave(); for (const id of [...remotes.keys()]) removeRemote(id);
+  worldHistory.length = worldQueue.length = 0; setRoomControls();
+});
+function updateNetwork(dt) {
+  animateRemotes(dt);
+  if (!coop.role) return;
+  networkTime += dt; worldTime += dt;
+  if (networkTime >= 0.08) {
+    networkTime = 0;
+    coop.send({ type: 'state', id: coop.id, mode: playerMode, p: activePosition().toArray(), yaw, pitch,
+      speed: actualSpeed, color: paintColor.value, motion: playerMode === 'human' ? human.state : 'air' });
+  }
+  if (coop.role === 'host' && worldTime >= 0.15) {
+    worldTime = 0;
+    while (worldQueue.length) coop.send({ type: 'world', events: worldQueue.splice(0, 30) });
   }
 }
 
@@ -393,8 +642,9 @@ function frame(now) {
   if (state === 'playing') {
     elapsed += dt;
     U.uTime.value = elapsed;
-    updateFlight(dt, pad);
-    city.update(dt, player.pos);
+    if (playerMode === 'dragon') updateFlight(dt, pad);
+    else updateHuman(dt, pad);
+    city.update(dt, activePosition());
     urban.update(dt);
     polyProps.update(dt);
     fx.update(dt, city);
@@ -407,6 +657,7 @@ function frame(now) {
     sky.updateAltitude?.(150, U.uTime.value);
     U.uTime.value += dt;
   }
+  updateNetwork(dt);
   composer.render();
 }
 requestAnimationFrame(frame);
