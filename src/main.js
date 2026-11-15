@@ -17,6 +17,7 @@ import { addInkOutline } from './outline.js';
 import { clamp, damp, turnToward, U } from './util.js';
 import { createSky, createVisualPipeline } from './visual.js';
 import { createClouds } from './clouds.js';
+import { applyHalftone, halftoneUniform } from './halftone.js';
 
 const $ = (id) => document.getElementById(id);
 let recordWorld = () => {};
@@ -38,7 +39,14 @@ const camera = new THREE.PerspectiveCamera(70, 1, 1, 30000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 const touchDevice = matchMedia('(pointer: coarse)').matches;
 const maxPixelRatio = Math.min(devicePixelRatio || 1, touchDevice ? 0.85 : 1.25);
-let renderPixelRatio = maxPixelRatio;
+const resolutionScales = { normal: 1, pixel: 0.5, crunchy: 0.33 };
+let resolutionMode = 'normal';
+try {
+  const savedMode = localStorage.getItem('draco-resolution-mode');
+  if (Object.hasOwn(resolutionScales, savedMode)) resolutionMode = savedMode;
+} catch { /* Private browsing may block local storage. */ }
+let renderPixelRatio = maxPixelRatio * resolutionScales[resolutionMode];
+canvas.style.imageRendering = resolutionMode === 'normal' ? '' : 'pixelated';
 renderer.setPixelRatio(renderPixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -123,6 +131,7 @@ polyProps.ready.then(() => {
   for (const item of scene.children) if (item.name.startsWith('Poly Haven ')) makeMonochrome(item);
 });
 const meteor = new PaintMeteor(scene, city, fx, audio);
+meteor.tornado = tornado;
 meteor.onPaint = paintWorld;
 const resetButton = $('resetCity');
 resetButton.addEventListener('click', () => {
@@ -619,6 +628,20 @@ function updateNetwork(dt) {
 
 let qualityElapsed = 0, qualityFrames = 0, stableWindows = 0;
 let shadowElapsed = 0;
+const resolutionOptions = document.querySelectorAll('input[name="resolutionMode"]');
+resolutionOptions.forEach((option) => {
+  option.checked = option.value === resolutionMode;
+  option.addEventListener('change', () => {
+    if (!option.checked) return;
+    resolutionMode = option.value;
+    try { localStorage.setItem('draco-resolution-mode', resolutionMode); } catch { /* Optional preference. */ }
+    canvas.style.imageRendering = resolutionMode === 'normal' ? '' : 'pixelated';
+    renderPixelRatio = maxPixelRatio * resolutionScales[resolutionMode];
+    qualityElapsed = qualityFrames = stableWindows = 0;
+    renderer.setPixelRatio(renderPixelRatio);
+    resize();
+  });
+});
 function adaptResolution(rawDt) {
   if (document.hidden || state !== 'playing' || rawDt > 0.5) {
     qualityElapsed = 0; qualityFrames = 0; stableWindows = 0;
@@ -628,9 +651,11 @@ function adaptResolution(rawDt) {
   if (qualityElapsed < 3) return;
   const fps = qualityFrames / qualityElapsed;
   qualityElapsed = 0; qualityFrames = 0;
+  const cap = maxPixelRatio * resolutionScales[resolutionMode];
+  const floor = Math.min(cap, 0.65 * resolutionScales[resolutionMode]);
   let next = renderPixelRatio;
-  if (fps < 35) { next = Math.max(0.65, renderPixelRatio - 0.15); stableWindows = 0; }
-  else if (fps > 55 && ++stableWindows >= 3) { next = Math.min(maxPixelRatio, renderPixelRatio + 0.1); stableWindows = 0; }
+  if (fps < 35) { next = Math.max(floor, renderPixelRatio - 0.15 * resolutionScales[resolutionMode]); stableWindows = 0; }
+  else if (fps > 55 && ++stableWindows >= 3) { next = Math.min(cap, renderPixelRatio + 0.1 * resolutionScales[resolutionMode]); stableWindows = 0; }
   else if (fps <= 55) stableWindows = 0;
   if (Math.abs(next - renderPixelRatio) > 0.01) {
     renderPixelRatio = next;
@@ -639,6 +664,7 @@ function adaptResolution(rawDt) {
   }
 }
 
+let halftoneScanTime = Infinity;
 let previous = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
@@ -682,6 +708,12 @@ function frame(now) {
     U.uTime.value += dt;
   }
   updateNetwork(dt);
+  // New buildings, ink and remote players can appear while the game runs.
+  // Prepare their materials periodically without walking the scene every frame.
+  if (halftoneUniform.value > 0) {
+    halftoneScanTime += rawDt;
+    if (halftoneScanTime >= 0.25) { applyHalftone(scene); halftoneScanTime = 0; }
+  } else halftoneScanTime = Infinity;
   shadowElapsed += Math.min(rawDt, 0.25);
   if (shadowElapsed >= 0.08) { renderer.shadowMap.needsUpdate = true; shadowElapsed = 0; }
   composer.render();

@@ -52,3 +52,38 @@ test('paint ribbons widen upward and faster flight makes the tornado spin faster
   effect.clear();
   assert.equal(scene.children.length, 0);
 });
+
+test('fast shots cross a tornado continuously and successive shots steer its drift', () => {
+  const effect = new PaintTornado(new THREE.Scene());
+  effect.spawn({ x: 0, y: 100, z: 0, radius: 60, duration: 3,
+    direction: 1, generation: 1, flightSpeed: 60 });
+  const vortex = effect.vortices[0];
+  const shot = (x, z) => ({ forward: new THREE.Vector3(x, 0, z),
+    velocity: new THREE.Vector3(), radius: 16, state: 'waiting', hitVortices: new Set() });
+  assert.equal(effect.hitByPaintBall(shot(1, 0),
+    new THREE.Vector3(-300, 100, 0), new THREE.Vector3(300, 100, 0)), true);
+  assert.ok(vortex.drift.x > 0);
+  const startX = vortex.group.position.x;
+  effect.update(1, null, null, 0);
+  assert.ok(vortex.group.position.x > startX + 50);
+  assert.ok(vortex.drift.x > 35, 'the vortex retains momentum after a second');
+  assert.equal(effect.hitByPaintBall(shot(0, -1),
+    new THREE.Vector3(vortex.group.position.x, 100, 300),
+    new THREE.Vector3(vortex.group.position.x, 100, -300)), true);
+  assert.ok(vortex.drift.y < 0, 'another shot redirects it');
+  effect.clear();
+});
+
+test('a moving tornado detects a stationary paint ball along its swept path', () => {
+  const effect = new PaintTornado(new THREE.Scene());
+  effect.spawn({ x: 0, y: 100, z: 0, radius: 60, duration: 3,
+    direction: 1, generation: 1, flightSpeed: 60 });
+  const vortex = effect.vortices[0];
+  vortex.drift.set(150, 0);
+  effect.update(1, null, null, 0);
+  const ball = { forward: new THREE.Vector3(1, 0, 0), velocity: new THREE.Vector3(),
+    radius: 16, state: 'waiting', hitVortices: new Set() };
+  const position = new THREE.Vector3(75, 100, 0);
+  assert.equal(effect.hitByPaintBall(ball, position, position), true);
+  effect.clear();
+});

@@ -10,11 +10,11 @@ Segure Shift ou o gatilho direito para impulsionar. Ao ultrapassar aproximadamen
 
 Mergulhar aumenta continuamente a velocidade; frear ou interromper um mergulho muito rápido produz uma onda de impacto. Ao alcançar Mach 3 a 7, o voo ganha camadas progressivas de efeitos de velocidade. As nuvens se afastam quando o dragão passa e depois voltam a se formar.
 
-No menu inicial ou de pausa, escolha entre visual normal e impressão pontilhada de meio-tom. Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros, que desaparecem gradualmente após cerca de 15 segundos; use **Limpar tinta** para apagá-los antes. A tinta também colore as partes da cidade que toca; essa pintura permanece até ser limpa ou a cidade ser reconstruída.
+No menu inicial ou de pausa, escolha o meio-tom aplicado às superfícies, o nível de resolução normal, pixelado ou crunchy e o desfoque de diorama (tilt-shift). Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros, que desaparecem gradualmente após cerca de 15 segundos; use **Limpar tinta** para apagá-los antes. A tinta também colore as partes da cidade que toca; essa pintura permanece até ser limpa ou a cidade ser reconstruída.
 
 Voe em círculos na mesma direção para formar um tornado de tinta. Continuar girando faz o tornado crescer e permanecer por mais tempo; a velocidade do voo influencia sua rotação.
 
-Clique com o botão direito do mouse, pressione X no controle ou toque em **Tinta** para criar uma bola. Atravesse-a para lançar um meteoro com sua velocidade; ao alcançar o chão, ele destrói construções próximas.
+Clique com o botão direito do mouse, pressione X no controle ou toque em **Tinta** para disparar uma bola. Ao acertar um tornado, a bola o empurra na direção do disparo. Atravesse-a para lançar um meteoro com sua velocidade; ao alcançar o chão, ele destrói construções próximas.
 
 ## Executar localmente
 

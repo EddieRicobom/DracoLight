@@ -8,6 +8,8 @@ const GRAVITY = 55;
 const MAX_OBJECTS = 4;
 const MAX_AGE = 45;
 const SLICE_COUNT = 9;
+const SHOT_SPEED = 180;
+const SHOT_TIME = 4;
 
 function finiteVector(v) {
   return v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
@@ -72,6 +74,7 @@ export class PaintMeteor {
     this.impacts = [];
     this.nextId = 1;
     this.onPaint = null;
+    this.tornado = null;
   }
 
   fire(pos, dir, color) {
@@ -85,7 +88,8 @@ export class PaintMeteor {
     this.scene.add(group);
     const ball = { id: this.nextId++, group, position: group.position, forward,
       velocity: new THREE.Vector3(), radius: BALL_RADIUS, state: 'waiting', age: 0,
-      color: new THREE.Color(color ?? 0x18a35d), paintTime: 0 };
+      color: new THREE.Color(color ?? 0x18a35d), paintTime: 0,
+      shotTime: 0, hitVortices: new Set() };
     this.balls.push(ball);
     this.audio?.play?.('shot');
     return ball;
@@ -106,7 +110,12 @@ export class PaintMeteor {
       }
       if (ball.age > MAX_AGE) { this.removeBall(i); continue; }
       if (ball.state === 'waiting') {
-        if (playerPath && this.crossed(ball, oldPos, playerPath)) {
+        const previous = ball.position.clone();
+        const travel = Math.min(dt, Math.max(0, SHOT_TIME - ball.shotTime));
+        ball.position.addScaledVector(ball.forward, SHOT_SPEED * travel);
+        ball.shotTime += dt;
+        this.tornado?.hitByPaintBall?.(ball, previous, ball.position);
+        if (playerPath && this.crossed(ball, oldPos, playerPath, previous)) {
           if (finiteVector(velocity)) ball.velocity.set(velocity.x, velocity.y, velocity.z);
           else if (typeof velocity === 'number' && Number.isFinite(velocity) && playerPath.lengthSq() > 1e-8)
             ball.velocity.copy(playerPath).normalize().multiplyScalar(Math.max(0, velocity));
@@ -118,12 +127,14 @@ export class PaintMeteor {
           this.audio?.play?.('charge');
         }
       } else {
+        const previous = ball.position.clone();
         const previousY = ball.position.y;
         ball.position.addScaledVector(ball.velocity, dt);
         ball.position.y -= 0.5 * GRAVITY * dt * dt;
         ball.velocity.y -= GRAVITY * dt;
         ball.group.rotation.z += dt * 2.4;
         ball.group.rotation.x += dt * 1.3;
+        this.tornado?.hitByPaintBall?.(ball, previous, ball.position);
         if (previousY > ball.radius && ball.position.y <= ball.radius) {
           const fraction = (previousY - ball.radius) / Math.max(previousY - ball.position.y, 1e-8);
           ball.position.x -= ball.velocity.x * dt * (1 - fraction);
@@ -141,14 +152,20 @@ export class PaintMeteor {
     this.advanceImpacts();
   }
 
-  crossed(ball, oldPos, path) {
-    const lengthSq = path.lengthSq();
-    if (lengthSq < 1e-8) return false;
-    const offset = new THREE.Vector3().subVectors(ball.position, oldPos);
-    const t = THREE.MathUtils.clamp(offset.dot(path) / lengthSq, 0, 1);
-    const closest = new THREE.Vector3(oldPos.x, oldPos.y, oldPos.z).addScaledVector(path, t);
+  crossed(ball, oldPos, path, ballStart = ball.position) {
+    // Sweep the player's path relative to a moving shot, including fast boosts.
+    const relative = path.clone().sub(ball.position).add(ballStart);
+    const lengthSq = relative.lengthSq();
+    if (lengthSq < 1e-8) {
+      const reach = ball.radius + PLAYER_RADIUS;
+      const dx = oldPos.x - ballStart.x, dy = oldPos.y - ballStart.y, dz = oldPos.z - ballStart.z;
+      return dx * dx + dy * dy + dz * dz <= reach * reach;
+    }
+    const offset = new THREE.Vector3().subVectors(ballStart, oldPos);
+    const t = THREE.MathUtils.clamp(offset.dot(relative) / lengthSq, 0, 1);
+    const closest = new THREE.Vector3(oldPos.x, oldPos.y, oldPos.z).addScaledVector(relative, t);
     const reach = ball.radius + PLAYER_RADIUS;
-    return closest.distanceToSquared(ball.position) <= reach * reach;
+    return closest.distanceToSquared(ballStart) <= reach * reach;
   }
 
   startImpact(ball) {

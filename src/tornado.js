@@ -43,6 +43,30 @@ export class SpiralDetector {
 const RIBBONS = 4;
 const RIBBON_STEPS = 96;
 const DROPS = 160;
+const PUSH_SPEED = 85;
+const MAX_DRIFT_SPEED = 150;
+const DRIFT_DAMPING = 0.65;
+const WORLD_LIMIT = 2700;
+
+function sweptCylinderHit(start, end, center, bottom, top, radius) {
+  // Clip the shot to the tornado's height, then find the closest horizontal approach.
+  const dy = end.y - start.y;
+  let first = 0, last = 1;
+  if (Math.abs(dy) < 1e-8) {
+    if (start.y < bottom || start.y > top) return false;
+  } else {
+    first = Math.max(0, Math.min((bottom - start.y) / dy, (top - start.y) / dy));
+    last = Math.min(1, Math.max((bottom - start.y) / dy, (top - start.y) / dy));
+    if (first > last) return false;
+  }
+  const dx = end.x - start.x, dz = end.z - start.z;
+  const horizontalLengthSq = dx * dx + dz * dz;
+  const closest = horizontalLengthSq < 1e-8 ? first
+    : THREE.MathUtils.clamp(((center.x - start.x) * dx + (center.z - start.z) * dz) / horizontalLengthSq, first, last);
+  const x = start.x + dx * closest - center.x;
+  const z = start.z + dz * closest - center.z;
+  return x * x + z * z <= radius * radius;
+}
 
 function ribbonGeometry(radius, height, phase) {
   const vertices = new Float32Array((RIBBON_STEPS + 1) * 6);
@@ -105,6 +129,11 @@ export class PaintTornado {
       const v = this.vortices[i];
       v.age += dt;
       if (v.age >= v.life) { this.remove(i); continue; }
+      // A shot changes the vortex's momentum; drag keeps the motion visible for seconds.
+      v.previousPosition.copy(v.group.position);
+      v.group.position.x = THREE.MathUtils.clamp(v.group.position.x + v.drift.x * dt, -WORLD_LIMIT, WORLD_LIMIT);
+      v.group.position.z = THREE.MathUtils.clamp(v.group.position.z + v.drift.y * dt, -WORLD_LIMIT, WORLD_LIMIT);
+      v.drift.multiplyScalar(Math.exp(-DRIFT_DAMPING * dt));
       v.group.rotation.y += dt * v.direction * v.rotationSpeed;
       v.group.position.y = v.baseY + Math.sin(v.age * 2) * 2;
       const fade = Math.min(1, v.age * 2, (v.life - v.age) / 2);
@@ -154,7 +183,7 @@ export class PaintTornado {
     const baseY = spiral.y - height * 0.5;
     group.position.set(spiral.x, baseY, spiral.z);
     this.scene.add(group);
-    this.vortices.push({ group, ribbonMaterials, dropMaterial, age: 0, life: Math.min(30, 8 + duration * 1.5), direction: spiral.direction, generation: spiral.generation, baseRadius: radius, baseHeight: height, baseY, rotationSpeed: this.rotationSpeed(spiral.flightSpeed) });
+    this.vortices.push({ group, ribbonMaterials, dropMaterial, age: 0, life: Math.min(30, 8 + duration * 1.5), direction: spiral.direction, generation: spiral.generation, baseRadius: radius, baseHeight: height, baseY, drift: new THREE.Vector2(), previousPosition: group.position.clone(), rotationSpeed: this.rotationSpeed(spiral.flightSpeed) });
   }
   rotationSpeed(flightSpeed) { return THREE.MathUtils.clamp(flightSpeed * 0.012, 0.2, 4); }
   grow(v, spiral, color) {
@@ -168,6 +197,32 @@ export class PaintTornado {
     }
     v.rotationSpeed = this.rotationSpeed(spiral.flightSpeed);
     v.life = v.age + Math.min(30, 8 + spiral.duration * 1.5);
+  }
+  // Called once per paint ball update with its swept world-space path.
+  hitByPaintBall(ball, start, end) {
+    if (!ball || !start || !end) return false;
+    const direction = ball.state === 'meteor' && ball.velocity.lengthSq() > 1e-8
+      ? ball.velocity : ball.forward;
+    const horizontal = new THREE.Vector2(direction.x, direction.z);
+    if (horizontal.lengthSq() < 1e-8) return false;
+    horizontal.normalize();
+    let hit = false;
+    for (const vortex of this.vortices) {
+      if (ball.hitVortices?.has(vortex)) continue;
+      const height = vortex.baseHeight * vortex.group.scale.y;
+      const radius = vortex.baseRadius * vortex.group.scale.x + ball.radius;
+      const previous = vortex.previousPosition;
+      const relativeStart = new THREE.Vector3(start.x - previous.x, start.y - previous.y, start.z - previous.z);
+      const relativeEnd = new THREE.Vector3(end.x - vortex.group.position.x,
+        end.y - vortex.group.position.y, end.z - vortex.group.position.z);
+      if (!sweptCylinderHit(relativeStart, relativeEnd, { x: 0, z: 0 },
+        -ball.radius, height + ball.radius, radius)) continue;
+      vortex.drift.addScaledVector(horizontal, PUSH_SPEED);
+      if (vortex.drift.length() > MAX_DRIFT_SPEED) vortex.drift.setLength(MAX_DRIFT_SPEED);
+      ball.hitVortices?.add(vortex);
+      hit = true;
+    }
+    return hit;
   }
   remove(index) {
     const [v] = this.vortices.splice(index, 1);

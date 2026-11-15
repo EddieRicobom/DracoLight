@@ -4,6 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { halftoneUniform } from './halftone.js';
 
 // City rooftops are around 200 m; the upper atmosphere reaches its full
 // appearance at the game's 12 km flight ceiling.
@@ -156,31 +157,43 @@ export function createVisualPipeline(renderer, scene, camera) {
   composer.addPass(new RenderPass(scene, camera));
   composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.3, 1.35));
   const grade = new ShaderPass({
-    uniforms: { tDiffuse: { value: null }, uHalftone: { value: 0 } },
+    uniforms: {
+      tDiffuse: { value: null },
+      uTexel: { value: new THREE.Vector2(1, 1) },
+      uTiltShift: { value: 0 },
+    },
     vertexShader: `varying vec2 vUv;
       void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `uniform sampler2D tDiffuse;
-      uniform float uHalftone;
+      uniform vec2 uTexel;
+      uniform float uTiltShift;
       varying vec2 vUv;
       void main() {
         vec3 color = texture2D(tDiffuse, vUv).rgb;
+        float blur = uTiltShift * smoothstep(0.16, 0.43, abs(vUv.y - 0.5));
+        if (blur > 0.001) {
+          vec2 radius = uTexel * (2.0 + 5.0 * blur);
+          vec3 soft = color * 4.0;
+          soft += texture2D(tDiffuse, clamp(vUv + vec2(radius.x, 0.0), 0.0, 1.0)).rgb;
+          soft += texture2D(tDiffuse, clamp(vUv - vec2(radius.x, 0.0), 0.0, 1.0)).rgb;
+          soft += texture2D(tDiffuse, clamp(vUv + vec2(0.0, radius.y), 0.0, 1.0)).rgb;
+          soft += texture2D(tDiffuse, clamp(vUv - vec2(0.0, radius.y), 0.0, 1.0)).rgb;
+          soft += texture2D(tDiffuse, clamp(vUv + radius * 0.7, 0.0, 1.0)).rgb;
+          soft += texture2D(tDiffuse, clamp(vUv - radius * 0.7, 0.0, 1.0)).rgb;
+          soft += texture2D(tDiffuse, clamp(vUv + radius * vec2(0.7, -0.7), 0.0, 1.0)).rgb;
+          soft += texture2D(tDiffuse, clamp(vUv + radius * vec2(-0.7, 0.7), 0.0, 1.0)).rgb;
+          color = mix(color, soft / 12.0, blur);
+        }
         color = max(vec3(0.0), (color - 0.018) * 1.025 + 0.018);
         vec2 p = vUv * 2.0 - 1.0;
         color *= 1.0 - 0.09 * smoothstep(0.2, 1.7, dot(p, p));
-        if (uHalftone > 0.5) {
-          // One luminance-based screen modulates every channel equally, so
-          // neutral scenery remains neutral and colored paint keeps its hue.
-          vec2 fromCentre = fract(gl_FragCoord.xy / 8.0) - 0.5;
-          float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
-          float radiusSquared = (1.0 - clamp(luminance, 0.0, 1.0)) * 0.31831;
-          float mark = 1.0 - smoothstep(radiusSquared - 0.035,
-                                      radiusSquared + 0.035, dot(fromCentre, fromCentre));
-          float modulation = mix(1.12, 0.72, mark);
-          color = mix(color, min(color * modulation, vec3(1.0)), 0.6);
-        }
         gl_FragColor = vec4(color, 1.0);
       }`,
   });
+  // EffectComposer passes drawing-buffer dimensions here, including its pixel ratio.
+  grade.setSize = (width, height) => {
+    grade.uniforms.uTexel.value.set(1 / Math.max(width, 1), 1 / Math.max(height, 1));
+  };
   composer.addPass(new OutputPass());
   composer.addPass(grade);
   composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
@@ -189,11 +202,26 @@ export function createVisualPipeline(renderer, scene, camera) {
   const storageKey = 'dracoLight.shadingMode';
   composer.setHalftone = (enabled) => {
     const mode = enabled ? 'halftone' : 'normal';
-    grade.uniforms.uHalftone.value = enabled ? 1 : 0;
+    halftoneUniform.value = enabled ? 1 : 0;
     shadingControls.forEach((input) => { input.checked = input.value === mode; });
     try { window.localStorage.setItem(storageKey, mode); } catch { /* Private browsing can disable storage. */ }
   };
-  composer.isHalftoneEnabled = () => grade.uniforms.uHalftone.value > 0.5;
+  composer.isHalftoneEnabled = () => halftoneUniform.value > 0.5;
+  const tiltShiftControl = typeof document !== 'undefined'
+    ? document.getElementById('tiltShift') : null;
+  const tiltShiftStorageKey = 'dracoLight.tiltShift';
+  composer.setTiltShift = (enabled) => {
+    grade.uniforms.uTiltShift.value = enabled ? 1 : 0;
+    if (tiltShiftControl) tiltShiftControl.checked = enabled;
+    try { window.localStorage.setItem(tiltShiftStorageKey, enabled ? 'on' : 'off'); }
+    catch { /* Private browsing can disable storage. */ }
+  };
+  composer.isTiltShiftEnabled = () => grade.uniforms.uTiltShift.value > 0.5;
+  let savedTiltShift;
+  try { savedTiltShift = window.localStorage.getItem(tiltShiftStorageKey); }
+  catch { /* Use the standard image. */ }
+  if (savedTiltShift === 'on') composer.setTiltShift(true);
+  tiltShiftControl?.addEventListener('change', () => composer.setTiltShift(tiltShiftControl.checked));
   let savedMode;
   try { savedMode = window.localStorage.getItem(storageKey); } catch { /* Use the normal mode. */ }
   if (savedMode === 'halftone') composer.setHalftone(true);
