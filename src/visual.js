@@ -48,11 +48,11 @@ export function createSky(scene) {
         vec3 sunDir = normalize(vec3(-180.0, 260.0, 130.0));
         float sun = max(dot(dir, sunDir), 0.0);
 
-        vec3 city = mix(vec3(0.48, 0.31, 0.27), vec3(0.22, 0.27, 0.38), smoothstep(-0.02, 0.42, h));
-        city = mix(city, vec3(0.065, 0.12, 0.25), smoothstep(0.36, 0.94, h));
-        city = mix(vec3(0.17, 0.16, 0.19), city, smoothstep(-0.28, 0.015, h));
+        vec3 city = mix(vec3(0.76, 0.49, 0.39), vec3(0.35, 0.56, 0.62), smoothstep(-0.02, 0.42, h));
+        city = mix(city, vec3(0.13, 0.31, 0.43), smoothstep(0.36, 0.94, h));
+        city = mix(vec3(0.25, 0.30, 0.33), city, smoothstep(-0.28, 0.015, h));
         float haze = exp(-pow(max(h, 0.0) / 0.16, 2.0));
-        city += vec3(0.18, 0.105, 0.065) * haze * pow(sun, 3.0);
+        city += vec3(0.18, 0.11, 0.07) * haze * pow(sun, 3.0);
 
         float horizon = mix(0.0, -0.14, a);
         float rim = exp(-pow((h - horizon) / mix(0.25, 0.075, a), 2.0));
@@ -91,7 +91,7 @@ export function createSky(scene) {
   const fog = scene.fog instanceof THREE.FogExp2 ? scene.fog : null;
   const baseFogDensity = fog?.density ?? 0;
   const baseFogColor = fog?.color.clone();
-  const highFogColor = new THREE.Color(0x193755);
+  const highFogColor = new THREE.Color(0x264d65);
   const sunlight = scene.children.find((child) => child.isDirectionalLight && child.castShadow);
   const ambient = scene.children.find((child) => child.isHemisphereLight);
   const sunColor = sunlight?.color.clone();
@@ -164,7 +164,7 @@ export function createVisualPipeline(renderer, scene, camera) {
       void main() {
         vec3 color = texture2D(tDiffuse, vUv).rgb;
         float light = clamp(dot(color, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
-        color *= mix(vec3(0.94, 0.99, 1.04), vec3(1.04, 1.0, 0.97), smoothstep(0.12, 0.9, light));
+        color *= mix(vec3(0.94, 1.0, 1.02), vec3(1.04, 1.01, 0.96), smoothstep(0.12, 0.9, light));
         color = max(vec3(0.0), (color - 0.018) * 1.025 + 0.018);
         vec2 p = vUv * 2.0 - 1.0;
         color *= 1.0 - 0.09 * smoothstep(0.2, 1.7, dot(p, p));

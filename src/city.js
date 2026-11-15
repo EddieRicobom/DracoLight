@@ -211,13 +211,13 @@ export class City {
   _buildGround() {
     // far ground
     const far = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000).rotateX(-Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0x2a2624, roughness: 1 }));
+      new THREE.MeshStandardMaterial({ color: 0x29343b, roughness: 1 }));
     far.position.y = -0.05; far.receiveShadow = true; this.scene.add(far);
 
     // road surface with markings (canvas)
     const S = 2048, c = document.createElement('canvas'); c.width = c.height = S;
     const g = c.getContext('2d'), k = S / (2 * HALF), R = rng(7);
-    g.fillStyle = '#383a3c'; g.fillRect(0, 0, S, S);
+    g.fillStyle = '#46535a'; g.fillRect(0, 0, S, S);
     for (let i = 0; i < 26000; i++) { const v = 40 + R() * 30 | 0; g.fillStyle = `rgba(${v},${v},${v + 2},0.35)`; g.fillRect(R() * S, R() * S, 2 + R() * 3, 2 + R() * 3); }
     for (let i = 0; i < 260; i++) { g.fillStyle = 'rgba(20,20,22,0.25)'; g.beginPath(); g.ellipse(R() * S, R() * S, 4 + R() * 14, 3 + R() * 8, R() * 3, 0, 7); g.fill(); }
     // Asphalt repair patches and fine transverse seams break up the flat road plane.
@@ -312,9 +312,9 @@ export class City {
   _buildChunks() {
     const cells = []; // [cx,cy,cz,b]
     const palettes = [
-      [[0.45, 0.5, 0.56], [0.36, 0.42, 0.5], [0.52, 0.55, 0.58], [0.3, 0.34, 0.4]], // glass towers (mullions)
-      [[0.66, 0.62, 0.56], [0.58, 0.56, 0.54], [0.72, 0.68, 0.6], [0.5, 0.48, 0.46]], // office stone
-      [[0.55, 0.28, 0.2], [0.6, 0.38, 0.26], [0.46, 0.25, 0.2], [0.68, 0.55, 0.42]],  // brick
+      [[0.43, 0.62, 0.65], [0.32, 0.51, 0.57], [0.53, 0.67, 0.67], [0.3, 0.43, 0.5]], // glass towers (mullions)
+      [[0.79, 0.73, 0.62], [0.67, 0.68, 0.62], [0.86, 0.79, 0.67], [0.61, 0.63, 0.6]], // office stone
+      [[0.72, 0.39, 0.31], [0.78, 0.49, 0.37], [0.62, 0.35, 0.31], [0.77, 0.62, 0.48]],  // brick
     ];
     const R = rng(99);
     this.lots.forEach((L, b) => {
@@ -380,7 +380,7 @@ export class City {
       scorchPatch(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.94 }), true, concrete), this.blocks.length);
     this.blocks.forEach((B, i) => {
       m.makeTranslation(B.x0 + BLOCK / 2, 0.15, B.z0 + BLOCK / 2); slab.setMatrixAt(i, m);
-      slab.setColorAt(i, B.park ? c.setRGB(0.16, 0.24, 0.1, THREE.SRGBColorSpace) : c.setRGB(0.52, 0.5, 0.48, THREE.SRGBColorSpace));
+      slab.setColorAt(i, B.park ? c.setRGB(0.30, 0.43, 0.32, THREE.SRGBColorSpace) : c.setRGB(0.64, 0.65, 0.60, THREE.SRGBColorSpace));
     });
     slab.receiveShadow = true; this.scene.add(slab);
 
@@ -524,7 +524,7 @@ export class City {
     })();
     const trunk = new THREE.InstancedMesh(trunkG, new THREE.MeshStandardMaterial({ color: 0x3b2a20, roughness: 1 }), trees.length);
     const crown = new THREE.InstancedMesh(crownG, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 }), trees.length);
-    const leaf = [[0.72, 0.1, 0.05], [0.85, 0.28, 0.06], [0.9, 0.5, 0.1], [0.6, 0.06, 0.06], [0.95, 0.38, 0.08]];
+    const leaf = [[0.78, 0.28, 0.22], [0.87, 0.42, 0.25], [0.92, 0.62, 0.32], [0.68, 0.30, 0.30], [0.88, 0.51, 0.30]];
     trees.forEach(([x, z, sc], i) => {
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), R() * 6.28); s.setScalar(sc * 1.2);
       m.compose(p.set(x, 0.3, z), q, s); trunk.setMatrixAt(i, m); crown.setMatrixAt(i, m);
@@ -560,7 +560,7 @@ export class City {
       return g;
     })();
     const car = new THREE.InstancedMesh(carG, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.6 }), cars.length);
-    const carCols = [[0.6, 0.05, 0.04], [0.85, 0.85, 0.85], [0.08, 0.08, 0.09], [0.1, 0.2, 0.45], [0.55, 0.55, 0.58], [0.85, 0.6, 0.1]];
+    const carCols = [[0.75, 0.26, 0.23], [0.88, 0.85, 0.76], [0.18, 0.27, 0.3], [0.25, 0.49, 0.55], [0.58, 0.65, 0.63], [0.91, 0.68, 0.31]];
     cars.forEach(([x, z, a, r], i) => {
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), a); m.compose(p.set(x, 0, z), q, s.setScalar(1)); car.setMatrixAt(i, m);
       const C = carCols[(r * carCols.length) | 0]; car.setColorAt(i, c.setRGB(C[0], C[1], C[2], THREE.SRGBColorSpace));

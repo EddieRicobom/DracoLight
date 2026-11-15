@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GameAudio } from './audio.js';
-import { Pokemon } from './pokemon.js';
+import { Dragon, PALETTES } from './dragon.js';
 import { City, HALF } from './city.js';
 import { createUrbanDetails } from './urban.js';
 import { createPolyProps } from './polyprops.js';
@@ -60,7 +60,7 @@ const inkRight = new InkTrail(scene, camera, 9);
 const city = new City(scene, fx);
 const urban = createUrbanDetails(scene, city);
 const polyProps = createPolyProps(scene, city);
-const player = new Pokemon(scene, 'rayquaza');
+const player = new Dragon(scene, PALETTES.red);
 player.pos.set(0, 115, 115);
 player.fwd.set(0, 0, -1);
 player.resetTrail();
@@ -80,6 +80,16 @@ let state = 'menu', elapsed = 0, stamina = 100;
 let yaw = Math.PI, pitch = 0, speed = FLIGHT.cruise;
 let collisionTime = 0, wakeTime = 0, fpsTime = 0, frames = 0;
 const keys = new Set();
+let activeGamepad = null, gamepadStartHeld = false, draggingMouse = false;
+const stick = (value) => Math.abs(value || 0) < 0.14 ? 0 : Math.sign(value) * (Math.abs(value) - 0.14) / 0.86;
+function currentGamepad() {
+  const pads = navigator.getGamepads?.() || [];
+  if (activeGamepad !== null && pads[activeGamepad]?.connected) return pads[activeGamepad];
+  activeGamepad = pads.findIndex((pad) => pad?.connected && pad.mapping === 'standard');
+  if (activeGamepad < 0) { activeGamepad = null; return null; }
+  return pads[activeGamepad];
+}
+function buttonDown(pad, index) { return !!pad?.buttons[index]?.pressed; }
 const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
 const desired = new THREE.Vector3(), side = new THREE.Vector3();
 const target = new THREE.Vector3(), old = new THREE.Vector3(), motion = new THREE.Vector3();
@@ -110,13 +120,15 @@ function start() {
   state = 'playing';
   menu.classList.add('off');
   hud.classList.add('on');
-  canvas.requestPointerLock?.();
+  // A controller or mouse drag can still steer when pointer lock is unavailable.
+  canvas.requestPointerLock?.()?.catch?.(() => {});
 }
 function pause() {
   if (state !== 'playing') return;
   state = 'paused';
   audio.setFlight(0, false);
   keys.clear();
+  draggingMouse = false;
   document.exitPointerLock?.();
   menu.classList.remove('off');
   hud.classList.remove('on');
@@ -126,7 +138,7 @@ function pause() {
 }
 go.disabled = true;
 go.textContent = 'Carregando modelo…';
-player.ready.then(() => {
+Promise.resolve().then(() => {
   go.disabled = false;
   go.textContent = 'Começar a voar';
 }).catch(() => {
@@ -135,10 +147,10 @@ player.ready.then(() => {
 });
 go.addEventListener('click', start);
 canvas.addEventListener('click', () => {
-  if (state === 'playing' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.();
+  if (state === 'playing' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.()?.catch?.(() => {});
 });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== canvas && state === 'playing') pause();
+  if (document.pointerLockElement !== canvas && state === 'playing' && !currentGamepad() && !draggingMouse) pause();
 });
 document.addEventListener('keydown', (e) => {
   if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
@@ -151,21 +163,37 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('keyup', (e) => keys.delete(e.code));
 document.addEventListener('mousemove', (e) => {
-  if (state !== 'playing' || document.pointerLockElement !== canvas) return;
+  if (state !== 'playing' || (document.pointerLockElement !== canvas && !draggingMouse)) return;
   yaw -= e.movementX * 0.0024;
   pitch = clamp(pitch - e.movementY * 0.0021, -1.35, 1.35);
+});
+canvas.addEventListener('pointerdown', (e) => {
+  if (state !== 'playing' || e.button !== 0) return;
+  draggingMouse = true;
+  canvas.setPointerCapture?.(e.pointerId);
+});
+canvas.addEventListener('pointerup', () => { draggingMouse = false; });
+canvas.addEventListener('pointercancel', () => { draggingMouse = false; });
+addEventListener('gamepaddisconnected', (e) => {
+  if (e.gamepad.index !== activeGamepad) return;
+  activeGamepad = null;
+  gamepadStartHeld = false;
+  if (state === 'playing') pause();
 });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('blur', () => { keys.clear(); if (state === 'playing') pause(); });
 
-function updateFlight(dt) {
+function updateFlight(dt, pad) {
+  yaw -= stick(pad?.axes[2]) * dt * 2.4;
+  pitch = clamp(pitch - stick(pad?.axes[3]) * dt * 2.1, -1.35, 1.35);
   const f = player.fwd;
   desired.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   turnToward(f, desired, dt * FLIGHT.turnRate);
   side.crossVectors(f, THREE.Object3D.DEFAULT_UP).normalize();
-  const boosting = (keys.has('ShiftLeft') || keys.has('ShiftRight')) && stamina > 1;
-  const baseSpeed = boosting ? FLIGHT.boost : keys.has('KeyW') ? FLIGHT.accelerate :
-    keys.has('KeyS') ? FLIGHT.brake : FLIGHT.cruise;
+  const boosting = (keys.has('ShiftLeft') || keys.has('ShiftRight') || buttonDown(pad, 7)) && stamina > 1;
+  const throttle = stick(pad?.axes[1]);
+  const baseSpeed = boosting ? FLIGHT.boost : keys.has('KeyW') || throttle < -0.25 ? FLIGHT.accelerate :
+    keys.has('KeyS') || throttle > 0.25 ? FLIGHT.brake : FLIGHT.cruise;
   const wanted = baseSpeed * altitudeSpeed(player.pos.y);
   speed += (wanted - speed) * damp(boosting ? 3.8 : 2.8, dt);
   stamina = clamp(stamina + (boosting ? -FLIGHT.boostDrain : FLIGHT.recovery) * dt, 0, 100);
@@ -174,8 +202,9 @@ function updateFlight(dt) {
   player.pos.addScaledVector(f, speed * dt);
   if (keys.has('KeyA')) player.pos.addScaledVector(side, -speed * dt * 0.58);
   if (keys.has('KeyD')) player.pos.addScaledVector(side, speed * dt * 0.58);
-  if (keys.has('Space')) player.pos.y += speed * dt * 0.75;
-  if (keys.has('KeyC')) player.pos.y -= speed * dt * 0.75;
+  player.pos.addScaledVector(side, stick(pad?.axes[0]) * speed * dt * 0.58);
+  if (keys.has('Space') || buttonDown(pad, 0)) player.pos.y += speed * dt * 0.75;
+  if (keys.has('KeyC') || buttonDown(pad, 1)) player.pos.y -= speed * dt * 0.75;
   player.pos.y = clamp(player.pos.y, 7, FLIGHT.ceiling);
   const bound = flightBoundary(player.pos.y);
   player.pos.x = clamp(player.pos.x, -bound, bound);
@@ -218,8 +247,8 @@ function updateFlight(dt) {
 }
 
 function updateCamera(dt) {
-  const back = tmp.copy(player.fwd).multiplyScalar(-25 - clamp(speed / 90, 0, 14));
-  const elevated = target.copy(player.pos).add(back).addScaledVector(THREE.Object3D.DEFAULT_UP, 9);
+  const back = tmp.copy(player.fwd).multiplyScalar(-48 - clamp(speed / 90, 0, 12));
+  const elevated = target.copy(player.pos).add(back).addScaledVector(THREE.Object3D.DEFAULT_UP, 22);
   camera.position.lerp(elevated, damp(5.5, dt));
   if (fx.shake > 0.02) camera.position.add(tmp2.set((Math.random() - 0.5) * fx.shake, (Math.random() - 0.5) * fx.shake, 0));
   camera.lookAt(tmp2.copy(player.pos).addScaledVector(player.fwd, 60));
@@ -273,11 +302,18 @@ function frame(now) {
   const rawDt = (now - previous) / 1000;
   previous = now;
   const dt = Math.min(0.05, rawDt);
+  const pad = currentGamepad();
+  const startHeld = buttonDown(pad, 9);
+  if (startHeld && !gamepadStartHeld) {
+    if (state === 'playing') pause();
+    else if (!go.disabled) start();
+  }
+  gamepadStartHeld = startHeld;
   adaptResolution(rawDt);
   if (state === 'playing') {
     elapsed += dt;
     U.uTime.value = elapsed;
-    updateFlight(dt);
+    updateFlight(dt, pad);
     city.update(dt, player.pos);
     urban.update(dt);
     polyProps.update(dt);

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Draco Light</title>
 <style>
-  html,body{margin:0;height:100%;background:#0a0506;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#f3d9bd}
+  html,body{margin:0;height:100%;background:#101f28;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#fff0d8}
   canvas#c{position:fixed;inset:0;width:100vw;height:100vh;display:block}
   #hud{position:fixed;inset:0;pointer-events:none;opacity:0;transition:opacity .6s}
   #hud.on{opacity:1}
@@ -14,9 +14,9 @@
   .lbl{font:600 11px/1 system-ui;letter-spacing:.18em;text-transform:uppercase;margin:0 0 6px;opacity:.85;text-shadow:0 1px 3px #000}
   .bar{height:8px;background:rgba(0,0,0,.45);border:1px solid rgba(243,217,189,.25);border-radius:5px;overflow:hidden;margin-bottom:10px}
   .bar i{display:block;height:100%;width:100%;transition:width .15s}
-  #hpP i{background:linear-gradient(90deg,#8d1410,#e2392c,#ffb36b)}
-  #stP i{background:linear-gradient(90deg,#a7731d,#f3c768)}
-  #hpE i{background:linear-gradient(90deg,#6fa6d8,#e9f4ff)}
+  #hpP i{background:linear-gradient(90deg,#9f3430,#e85a42,#ffbd71)}
+  #stP i{background:linear-gradient(90deg,#c87936,#ffd57b)}
+  #hpE i{background:linear-gradient(90deg,#50aeb3,#d1f6e9)}
   #cross{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;border:1.5px solid rgba(255,230,200,.7);border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,.6)}
   #cross:after{content:"";position:absolute;left:50%;top:50%;width:3px;height:3px;margin:-1.5px;background:#ffe9cf;border-radius:50%}
   #cross.hit{border-color:#ff6a3a;transform:scale(1.25)}
@@ -26,26 +26,26 @@
   #score b{font-size:22px;color:#ffcf8a}
   #dmg{position:absolute;inset:0;box-shadow:inset 0 0 160px rgba(140,200,255,0);transition:box-shadow .15s}
   #fps{position:absolute;right:10px;top:8px;font:11px monospace;opacity:.5}
-  #menu{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 55%,rgba(42,11,12,.82),rgba(10,5,6,.94) 70%);z-index:5;transition:opacity .5s;text-align:center}
+  #menu{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 55%,rgba(35,62,68,.82),rgba(16,31,40,.95) 70%);z-index:5;transition:opacity .5s;text-align:center}
   #menu.off{opacity:0;pointer-events:none}
-  #menu h1{margin:0;font:600 72px/1 "Songti SC","Noto Serif SC",Georgia,serif;color:#d8322a;letter-spacing:.1em;text-shadow:0 0 40px rgba(216,50,42,.5)}
+  #menu h1{margin:0;font:600 72px/1 "Songti SC","Noto Serif SC",Georgia,serif;color:#f27c5c;letter-spacing:.1em;text-shadow:0 0 40px rgba(242,124,92,.35)}
   #menu h2{margin:10px 0 26px;font:500 13px/1.4 system-ui;letter-spacing:.32em;text-transform:uppercase;opacity:.8}
   #menu p{max-width:560px;font-size:14px;line-height:1.6;opacity:.85;margin:0 16px 20px}
   .keys{display:grid;grid-template-columns:auto auto;gap:6px 18px;font-size:13px;text-align:left;margin-bottom:28px}
   .keys kbd{display:inline-block;min-width:18px;padding:2px 7px;border:1px solid rgba(243,217,189,.35);border-radius:5px;background:rgba(255,255,255,.06);font:600 11px/1.4 system-ui;text-align:center}
-  #go{pointer-events:auto;font:700 13px/1 system-ui;letter-spacing:.24em;text-transform:uppercase;color:#1b0705;background:linear-gradient(#ffcf8a,#e9a15c);border:0;border-radius:999px;padding:15px 34px;cursor:pointer;box-shadow:0 0 30px rgba(233,161,92,.45)}
+  #go{pointer-events:auto;font:700 13px/1 system-ui;letter-spacing:.24em;text-transform:uppercase;color:#24373a;background:linear-gradient(#ffe1a0,#f6a65f);border:0;border-radius:999px;padding:15px 34px;cursor:pointer;box-shadow:0 0 30px rgba(246,166,95,.32)}
   #go:hover{filter:brightness(1.1)}
   #status{margin-top:16px;font-size:11px;letter-spacing:.2em;text-transform:uppercase;opacity:.55}
   #credit{position:fixed;left:18px;bottom:14px;font-size:10px;letter-spacing:.12em;opacity:.4;z-index:6;pointer-events:none}
   /* Keep combat information legible against both the sky and the city. */
-  .bars,.ebars,#score{background:linear-gradient(135deg,rgba(19,12,16,.86),rgba(19,12,16,.58));border:1px solid rgba(255,221,188,.19);box-shadow:0 8px 28px rgba(0,0,0,.28);backdrop-filter:blur(8px)}
+  .bars,.ebars,#score{background:linear-gradient(135deg,rgba(20,43,51,.90),rgba(20,43,51,.72));border:1px solid rgba(255,221,188,.19);box-shadow:0 8px 28px rgba(0,0,0,.28);backdrop-filter:blur(8px)}
   .bars{box-sizing:border-box;padding:14px 16px 5px;border-radius:12px;width:min(300px,calc(100vw - 48px))}
   .ebars{box-sizing:border-box;padding:12px 16px 3px;border-radius:12px;width:min(440px,calc(100vw - 100px))}
   .bar{height:9px;background:rgba(0,0,0,.65)}
   .lbl{letter-spacing:.13em;opacity:1}
   #score{padding:10px 15px;border-radius:12px;line-height:1.3}
   #score b{display:inline-block;margin-top:4px;font-variant-numeric:tabular-nums}
-  #warn{top:25%;width:max-content;max-width:calc(100vw - 40px);box-sizing:border-box;padding:11px 16px;border:1px solid rgba(147,205,255,.6);border-radius:8px;background:rgba(13,30,49,.88);text-align:center;line-height:1.4;letter-spacing:.16em}
+  #warn{top:25%;width:max-content;max-width:calc(100vw - 40px);box-sizing:border-box;padding:11px 16px;border:1px solid rgba(147,205,255,.6);border-radius:8px;background:rgba(23,56,66,.92);text-align:center;line-height:1.4;letter-spacing:.16em}
   #cross{transition:transform .12s,border-color .12s,box-shadow .12s}
   #cross.hit{box-shadow:0 0 14px #ff6437}
   #menu{box-sizing:border-box;padding:24px 20px 38px;overflow-y:auto;justify-content:safe center}
@@ -76,8 +76,8 @@
     .keys{gap:3px 14px;margin-bottom:12px;padding:10px 14px}
     #credit{display:none}
   }
-  #sound{position:fixed;z-index:7;right:14px;top:14px;padding:9px 12px;border:1px solid rgba(255,221,188,.35);border-radius:8px;background:rgba(19,12,16,.85);color:#f3d9bd;font:600 12px system-ui;cursor:pointer}
-  #sound:hover{background:#37231f}
+  #sound{position:fixed;z-index:7;right:14px;top:14px;padding:9px 12px;border:1px solid rgba(255,221,188,.35);border-radius:8px;background:rgba(20,43,51,.9);color:#fff0d8;font:600 12px system-ui;cursor:pointer}
+  #sound:hover{background:#30505a}
   #sound:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
   @media (prefers-reduced-motion:reduce){#hud,#menu,#cross,#go{transition:none}}
 </style>
@@ -95,17 +95,18 @@
   <h2 id="sub">Draco Light · voo livre</h2>
   <p id="msg">Voe livremente pela cidade, atravesse prédios e suba até a estratosfera. Sem inimigos: escolha seu próprio caminho.</p>
   <div class="keys">
-    <span><kbd>Mouse</kbd></span><span>direção do voo</span>
+    <span><kbd>Mouse</kbd> / <kbd>Analógico dir.</kbd></span><span>direção do voo</span>
     <span><kbd>W</kbd> <kbd>S</kbd></span><span>acelerar / frear</span>
     <span><kbd>A</kbd> <kbd>D</kbd></span><span>desviar para os lados</span>
     <span><kbd>Espaço</kbd> <kbd>C</kbd></span><span>subir / descer</span>
     <span><kbd>Shift</kbd></span><span>impulso / atravessar prédios</span>
     <span><kbd>Esc</kbd></span><span>pausar</span>
   </div>
+  <p>Controle: analógico esquerdo movimenta · gatilho direito impulsiona · Start pausa.</p>
   <button id="go">Carregando…</button>
   <div id="status"></div>
 </div>
-<div id="credit">Modelos: Pokémon 3D API · Pokémon pertence aos seus respectivos titulares</div>
+<div id="credit">Dragão oriental · voo livre</div>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

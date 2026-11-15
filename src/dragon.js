@@ -9,13 +9,13 @@ import { U, GLSL_COMMON, smooth, Y } from './util.js';
 const N = 86, SP = 0.95, RAD = 18, NECK = 1.6;
 
 export const PALETTES = {
-  red: { back: [0.62, 0.05, 0.035], back2: [0.85, 0.16, 0.06], belly: [0.93, 0.66, 0.3], mane: [0.95, 0.62, 0.2], horn: [0.92, 0.7, 0.42], eye: [6, 3.2, 0.5], claw: [0.95, 0.85, 0.6] },
+  red: { back: [0.42, 0.10, 0.09], back2: [0.58, 0.19, 0.13], belly: [0.75, 0.56, 0.34], mane: [0.72, 0.50, 0.26], horn: [0.82, 0.68, 0.48], eye: [2, 1.2, 0.4], claw: [0.86, 0.79, 0.64] },
   white: { back: [0.82, 0.85, 0.9], back2: [0.95, 0.97, 1.0], belly: [0.72, 0.8, 0.9], mane: [0.72, 0.85, 1.0], horn: [0.86, 0.9, 0.96], eye: [1.2, 3.5, 7], claw: [0.9, 0.95, 1.0] },
 };
 const col = (a) => new THREE.Color().setRGB(a[0], a[1], a[2], THREE.SRGBColorSpace);
 
 function bodyMaterial(P) {
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.42, metalness: 0.08 });
+  const m = new THREE.MeshToonMaterial({ color: 0xffffff });
   m.userData.hit = { value: 0 };
   m.onBeforeCompile = (s) => {
     Object.assign(s.uniforms, { uBack: { value: col(P.back) }, uBack2: { value: col(P.back2) }, uBelly: { value: col(P.belly) }, uMane: { value: col(P.mane) }, uHit: m.userData.hit, uTime: U.uTime });
@@ -172,7 +172,7 @@ export class Dragon {
     this.pos = new THREE.Vector3(); this.fwd = new THREE.Vector3(0, 0, -1); this.up = new THREE.Vector3(0, 1, 0);
     this.jaw = 0; this.hit = 0;
     const bodyM = bodyMaterial(P);
-    const plain = (c, r = 0.45, m = 0.1) => new THREE.MeshStandardMaterial({ color: col(c), roughness: r, metalness: m });
+    const plain = (c) => new THREE.MeshToonMaterial({ color: col(c) });
     const mats = { body: bodyM, head: plain(P.back2, 0.38), mane: plain(P.mane, 0.55, 0.25), horn: plain(P.horn, 0.3, 0.15), limb: plain(P.back, 0.45), claw: plain(P.claw, 0.25, 0.2) };
     mats.head.emissive = new THREE.Color(0, 0, 0); mats.limb.emissive = new THREE.Color(0, 0, 0);
     this.mats = mats;
