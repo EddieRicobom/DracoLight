@@ -6,8 +6,25 @@ export class GameAudio {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (!AudioContext) return;
       this.context = new AudioContext();
+      const c = this.context;
+      const buffer = c.createBuffer(1, c.sampleRate * 2, c.sampleRate);
+      const samples = buffer.getChannelData(0);
+      for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
+      const source = c.createBufferSource(); source.buffer = buffer; source.loop = true;
+      this.windFilter = c.createBiquadFilter(); this.windFilter.type = 'lowpass';
+      this.windGain = c.createGain(); this.windGain.gain.value = 0;
+      source.connect(this.windFilter).connect(this.windGain).connect(c.destination);
+      source.start();
     }
     if (this.context.state === 'suspended') await this.context.resume();
+  }
+  setFlight(speed, active = true) {
+    const c = this.context;
+    if (!c || !this.windGain) return;
+    const amount = Math.min(1, Math.max(0, speed / 500));
+    const volume = active && !this.muted ? 0.008 + amount * 0.035 : 0;
+    this.windGain.gain.setTargetAtTime(volume, c.currentTime, 0.25);
+    this.windFilter.frequency.setTargetAtTime(350 + amount * 1300, c.currentTime, 0.3);
   }
   play(kind) {
     const c = this.context;

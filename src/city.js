@@ -6,8 +6,9 @@ import { rng, clamp, smooth, U, GLSL_COMMON } from './util.js';
 // InstancedMesh; a chunk lives in `grid` so destruction, ray casts and collapse are lookups.
 // ---------------------------------------------------------------------------------------------
 export const CH = 5;
-const NB = 10, ROAD = 20, BLOCK = 70, PITCH = ROAD + BLOCK;
-export const HALF = (NB * PITCH) / 2;            // 450
+const NB = 60, ROAD = 20, BLOCK = 70, PITCH = ROAD + BLOCK;
+const CORE_HALF = 450, DISTRICT_BLOCKS = 10;
+export const HALF = (NB * PITCH) / 2;            // 2700
 const OX = -HALF, OZ = -HALF;
 const GX = (NB * PITCH) / CH, GZ = GX, GY = 48; // 180 x 48 x 180
 
@@ -176,7 +177,8 @@ function scorchPatch(m, paving = false, maps = asphalt) {
 export class City {
   constructor(scene, fx) {
     this.scene = scene; this.fx = fx;
-    this.grid = new Int32Array(GX * GY * GZ).fill(-1);
+    // Only occupied voxels need an entry. A dense 5.4 km grid would reserve 224 MB.
+    this.grid = new Map();
     this.score = 0;
     this.buildings = [];
     this._dirtyB = new Set(); this._collapseT = 0;
@@ -186,6 +188,8 @@ export class City {
     this._buildChunks();
     this._buildDebris();
     this._buildSkyline();
+    this._buildDistrictProxies();
+    for (let i = 0; i < 9; i++) this._streamDistricts({ x: 0, z: 0 });
   }
 
   // ---------------------------------------------------------------- ground, roads, blocks
@@ -277,7 +281,7 @@ export class City {
     for (let i = 0; i < NB; i++) for (let j = 0; j < NB; j++) {
       const x0 = OX + i * PITCH + ROAD / 2, z0 = OZ + j * PITCH + ROAD / 2;
       const cx = x0 + BLOCK / 2, cz = z0 + BLOCK / 2, d = Math.hypot(cx, cz);
-      const park = (R() < 0.09 && d > 120) || (i === 4 && j === 6);
+      const park = (R() < 0.09 && d > 120) || (i === NB / 2 - 1 && j === NB / 2 + 1);
       this.blocks.push({ x0, z0, park });
       if (park) continue;
       const bx = x0 + 5, bz = z0 + 5, bw = BLOCK - 10; // 60 x 60 buildable
@@ -285,13 +289,19 @@ export class City {
       const hmax = 25 + 190 * centre * centre;
       const r = R();
       let rects;
-      if (centre > 0.55 && r < 0.6) rects = [[bx + 5 * ((R() * 2) | 0), bz + 5 * ((R() * 2) | 0), 50 - 5 * ((R() * 3) | 0), 50 - 5 * ((R() * 3) | 0)]];
+      // Sparse low-rise outskirts keep the voxel budget bounded across the larger map.
+      if (Math.max(Math.abs(cx), Math.abs(cz)) > CORE_HALF) {
+        // Sparse outskirts keep the total voxel budget close to the old downtown.
+        if (R() > 0.68) continue;
+        const w = 25 + 5 * ((R() * 2) | 0), dd = 25 + 5 * ((R() * 2) | 0);
+        rects = [[bx + 5 * ((R() * 5) | 0), bz + 5 * ((R() * 5) | 0), w, dd]];
+      } else if (centre > 0.55 && r < 0.6) rects = [[bx + 5 * ((R() * 2) | 0), bz + 5 * ((R() * 2) | 0), 50 - 5 * ((R() * 3) | 0), 50 - 5 * ((R() * 3) | 0)]];
       else if (r < 0.45) rects = [[bx, bz, 30 - 5 * (R() < .4), 60], [bx + 35, bz, 25, 25 + 5 * ((R() * 2) | 0)], [bx + 35, bz + 35, 25, 25]];
       else rects = [[bx, bz, 25, 25], [bx + 30, bz, 30, 25], [bx, bz + 30, 25, 30], [bx + 30, bz + 30, 30, 30]];
       for (const [x, z, w, dd] of rects) {
         if (R() < 0.08 && rects.length > 1) continue; // plazas
         let h = Math.max(3, Math.round((hmax * (0.35 + 0.65 * R())) / CH));
-        if (i === 5 && j === 4 && w >= 40) h = 44; // landmark tower
+        if (i === NB / 2 && j === NB / 2 - 1 && w >= 40) h = 44; // landmark tower
         h = Math.min(h, GY - 2);
         const style = h > 16 ? (R() < 0.7 ? 0 : 1) : h > 7 ? (R() < 0.6 ? 1 : 0) : (R() < 0.7 ? 2 : 1);
         this.lots.push({ x, z, w, d: dd, h, style, seed: R() });
@@ -333,34 +343,33 @@ export class City {
     });
 
     const n = cells.length / 4; this.nChunks = n;
-    const geo = new THREE.BoxGeometry(CH, CH, CH);
     const mat = buildingMaterial();
-    const mesh = new THREE.InstancedMesh(geo, mat, n);
-    mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false;
     this.cx = new Int16Array(n); this.cy = new Int16Array(n); this.cz = new Int16Array(n);
     this.cb = new Int32Array(n); this.hp = new Float32Array(n); this.alive = new Uint8Array(n);
-    const info = new Float32Array(n * 2), burn = new Float32Array(n);
-    const m = new THREE.Matrix4(), c = new THREE.Color();
+    const districtCount = NB / DISTRICT_BLOCKS;
+    const districtCells = Array.from({ length: districtCount * districtCount }, () => []);
     for (let i = 0; i < n; i++) {
-      const x = cells[i * 4], y = cells[i * 4 + 1], z = cells[i * 4 + 2], b = cells[i * 4 + 3];
-      this.cx[i] = x; this.cy[i] = y; this.cz[i] = z; this.cb[i] = b; this.alive[i] = 1;
-      const L = this.lots[b], bld = this.buildings[b];
-      this.hp[i] = L.style === 0 ? 70 : 110;
-      this.grid[this.gi(x, y, z)] = i;
-      bld.cells.push(i); bld.alive++;
-      m.makeTranslation(OX + (x + 0.5) * CH, (y + 0.5) * CH, OZ + (z + 0.5) * CH);
-      mesh.setMatrixAt(i, m);
-      const k = 0.93 + 0.1 * ((x * 7 + z * 13 + b) % 5) / 5;
-      c.setRGB(bld.color[0] * k, bld.color[1] * k, bld.color[2] * k, THREE.SRGBColorSpace);
-      mesh.setColorAt(i, c);
-      info[i * 2] = L.style; info[i * 2 + 1] = L.seed;
+      const x = cells[i * 4], z = cells[i * 4 + 2];
+      const district = Math.floor(z * CH / (DISTRICT_BLOCKS * PITCH)) * districtCount +
+        Math.floor(x * CH / (DISTRICT_BLOCKS * PITCH));
+      districtCells[district].push(i);
     }
-    geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 2));
-    this.burnAttr = new THREE.InstancedBufferAttribute(burn, 1); this.burnAttr.setUsage(THREE.DynamicDrawUsage);
-    geo.setAttribute('aBurn', this.burnAttr);
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.mesh = mesh; this.scene.add(mesh);
-    this._mDirty = [Infinity, -1]; this._bDirty = [Infinity, -1];
+    this.meshes = []; this.chunkPart = new Uint8Array(n); this.chunkLocal = new Uint32Array(n);
+    this.burnAttr = { array: new Float32Array(n) };
+    const m = new THREE.Matrix4(), c = new THREE.Color();
+    for (let part = 0; part < districtCells.length; part++) {
+      const ids = districtCells[part];
+      this.meshes.push({ ids, mesh: null, burnAttribute: null, matrixDirty: [Infinity, -1], burnDirty: [Infinity, -1] });
+      for (let local = 0; local < ids.length; local++) {
+        const i = ids[local]; this.chunkPart[i] = part; this.chunkLocal[i] = local;
+        const x = cells[i * 4], y = cells[i * 4 + 1], z = cells[i * 4 + 2], b = cells[i * 4 + 3];
+        this.cx[i] = x; this.cy[i] = y; this.cz[i] = z; this.cb[i] = b; this.alive[i] = 1;
+        const L = this.lots[b], bld = this.buildings[b];
+        this.hp[i] = L.style === 0 ? 70 : 110;
+        this.grid.set(this.gi(x, y, z), i);
+        bld.cells.push(i); bld.alive++;
+      }
+    }
     // Reused flood-fill storage keeps repeated collapses allocation-free.
     this._collapseMarks = new Uint32Array(n);
     this._collapseStack = new Int32Array(n);
@@ -380,10 +389,98 @@ export class City {
   }
 
   gi(x, y, z) { return (y * GZ + z) * GX + x; }
+  _loadDistrict(part) {
+    const P = this.meshes[part], ids = P.ids;
+    if (P.mesh || !ids.length) return;
+    const geo = new THREE.BoxGeometry(CH, CH, CH);
+    const info = new Float32Array(ids.length * 2), burn = new Float32Array(ids.length);
+    const mesh = new THREE.InstancedMesh(geo, this.buildMat, ids.length);
+    mesh.castShadow = mesh.receiveShadow = true;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const burnAttribute = new THREE.InstancedBufferAttribute(burn, 1);
+    burnAttribute.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 2));
+    geo.setAttribute('aBurn', burnAttribute);
+    const m = new THREE.Matrix4(), c = new THREE.Color();
+    for (let local = 0; local < ids.length; local++) {
+      const i = ids[local], x = this.cx[i], y = this.cy[i], z = this.cz[i], b = this.cb[i];
+      const L = this.lots[b], B = this.buildings[b];
+      if (this.alive[i]) m.makeTranslation(OX + (x + 0.5) * CH, (y + 0.5) * CH, OZ + (z + 0.5) * CH);
+      else m.copy(ZERO);
+      mesh.setMatrixAt(local, m);
+      const k = 0.93 + 0.1 * ((x * 7 + z * 13 + b) % 5) / 5;
+      c.setRGB(B.color[0] * k, B.color[1] * k, B.color[2] * k, THREE.SRGBColorSpace);
+      mesh.setColorAt(local, c);
+      info[local * 2] = L.style; info[local * 2 + 1] = L.seed;
+      burn[local] = this.burnAttr.array[i];
+    }
+    mesh.computeBoundingSphere();
+    this.scene.add(mesh);
+    P.mesh = mesh; P.burnAttribute = burnAttribute;
+    P.matrixDirty = [Infinity, -1]; P.burnDirty = [Infinity, -1];
+    if (P.proxy) P.proxy.visible = false;
+  }
+  _unloadDistrict(part) {
+    const P = this.meshes[part]; if (!P.mesh) return;
+    this.scene.remove(P.mesh);
+    P.mesh.geometry.dispose(); P.mesh.dispose();
+    P.mesh = null; P.burnAttribute = null;
+    if (P.proxy) { P.proxy.visible = true; P.proxyDirty = true; }
+  }
+  _refreshProxy(P) {
+    if (!P.proxy || !P.proxyDirty) return;
+    const m = new THREE.Matrix4();
+    P.proxyIds.forEach((b, local) => {
+      const L = this.lots[b], B = this.buildings[b];
+      const h = L.h * CH * (B.alive / B.cells.length);
+      if (h > 0) m.makeScale(L.w, h, L.d).setPosition(L.x + L.w / 2, h / 2, L.z + L.d / 2);
+      else m.copy(ZERO);
+      P.proxy.setMatrixAt(local, m);
+    });
+    P.proxy.instanceMatrix.needsUpdate = true;
+    P.proxyDirty = false;
+  }
+  _buildDistrictProxies() {
+    const groups = this.meshes.map(() => []), count = NB / DISTRICT_BLOCKS;
+    this.lots.forEach((L, b) => {
+      const col = Math.floor((L.x - OX) / (DISTRICT_BLOCKS * PITCH));
+      const row = Math.floor((L.z - OZ) / (DISTRICT_BLOCKS * PITCH));
+      groups[row * count + col].push(b);
+    });
+    const proxyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 });
+    const m = new THREE.Matrix4(), c = new THREE.Color();
+    groups.forEach((ids, part) => {
+      if (!ids.length) return;
+      const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), proxyMat, ids.length);
+      ids.forEach((b, local) => {
+        const L = this.lots[b], B = this.buildings[b], h = L.h * CH;
+        m.makeScale(L.w, h, L.d).setPosition(L.x + L.w / 2, h / 2, L.z + L.d / 2);
+        mesh.setMatrixAt(local, m);
+        c.setRGB(B.color[0], B.color[1], B.color[2], THREE.SRGBColorSpace); mesh.setColorAt(local, c);
+      });
+      mesh.castShadow = false; mesh.receiveShadow = true;
+      this.scene.add(mesh); this.meshes[part].proxy = mesh; this.meshes[part].proxyIds = ids;
+    });
+  }
+  _streamDistricts(focus) {
+    if (!focus) return;
+    const count = NB / DISTRICT_BLOCKS, width = DISTRICT_BLOCKS * PITCH;
+    const col = clamp(Math.floor((focus.x - OX) / width), 0, count - 1);
+    const row = clamp(Math.floor((focus.z - OZ) / width), 0, count - 1);
+    let next = -1, nearest = Infinity;
+    for (let p = 0; p < this.meshes.length; p++) {
+      const dx = Math.abs(p % count - col), dz = Math.abs(Math.floor(p / count) - row);
+      if (dx > 1 || dz > 1) { this._unloadDistrict(p); this._refreshProxy(this.meshes[p]); continue; }
+      if (!this.meshes[p].mesh && this.meshes[p].ids.length && dx + dz < nearest) {
+        nearest = dx + dz; next = p;
+      }
+    }
+    if (next >= 0) this._loadDistrict(next);
+  }
   chunkAt(px, py, pz) {
     const x = Math.floor((px - OX) / CH), y = Math.floor(py / CH), z = Math.floor((pz - OZ) / CH);
     if (x < 0 || y < 0 || z < 0 || x >= GX || y >= GY || z >= GZ) return -1;
-    return this.grid[this.gi(x, y, z)];
+    return this.grid.get(this.gi(x, y, z)) ?? -1;
   }
   chunkCenter(i, out) { return out.set(OX + (this.cx[i] + 0.5) * CH, (this.cy[i] + 0.5) * CH, OZ + (this.cz[i] + 0.5) * CH); }
 
@@ -393,11 +490,13 @@ export class City {
     this.props = []; this.propHash = new Map();
     const trees = [], lamps = [], cars = [];
     for (const B of this.blocks) {
+      const outer = Math.max(Math.abs(B.x0 + BLOCK / 2), Math.abs(B.z0 + BLOCK / 2)) > CORE_HALF;
+      if (outer && (Math.floor((B.x0 - OX) / PITCH) + Math.floor((B.z0 - OZ) / PITCH)) % 4 !== 0) continue;
       if (B.park) {
-        for (let k = 0; k < 26; k++) trees.push([B.x0 + 6 + R() * (BLOCK - 12), B.z0 + 6 + R() * (BLOCK - 12), 0.8 + R() * 0.6]);
+        for (let k = 0; k < (outer ? 8 : 26); k++) trees.push([B.x0 + 6 + R() * (BLOCK - 12), B.z0 + 6 + R() * (BLOCK - 12), 0.8 + R() * 0.6]);
       }
       // sidewalk trees and lamps on the perimeter
-      for (let s = 6; s < BLOCK - 4; s += 14) {
+      for (let s = 6; s < BLOCK - 4; s += outer ? 35 : 14) {
         for (const [x, z] of [[B.x0 + s, B.z0 + 2], [B.x0 + s, B.z0 + BLOCK - 2], [B.x0 + 2, B.z0 + s], [B.x0 + BLOCK - 2, B.z0 + s]]) {
           if (R() < 0.55) trees.push([x, z, 0.6 + R() * 0.3]); else if (R() < 0.6) lamps.push([x, z]);
         }
@@ -406,11 +505,12 @@ export class City {
     // parked cars along the kerbs
     for (let i = 0; i <= NB; i++) for (let j = 0; j < NB; j++) {
       const p = OX + i * PITCH, q0 = OZ + j * PITCH + ROAD / 2 + 4;
+      const outer = Math.max(Math.abs(p), Math.abs(q0 + BLOCK / 2)) > CORE_HALF;
       for (let q = q0; q < q0 + BLOCK - 8; q += 6.5) {
-        if (R() < 0.45) cars.push([p - 7.2, q, 0, R()]);
-        if (R() < 0.45) cars.push([p + 7.2, q, Math.PI, R()]);
-        if (R() < 0.35) cars.push([q, p - 7.2, Math.PI / 2, R()]);
-        if (R() < 0.35) cars.push([q, p + 7.2, -Math.PI / 2, R()]);
+        if (R() < (outer ? 0.025 : 0.45)) cars.push([p - 7.2, q, 0, R()]);
+        if (R() < (outer ? 0.025 : 0.45)) cars.push([p + 7.2, q, Math.PI, R()]);
+        if (R() < (outer ? 0.02 : 0.35)) cars.push([q, p - 7.2, Math.PI / 2, R()]);
+        if (R() < (outer ? 0.02 : 0.35)) cars.push([q, p + 7.2, -Math.PI / 2, R()]);
       }
     }
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), c = new THREE.Color();
@@ -499,13 +599,25 @@ export class City {
   }
 
   // ----------------------------------------------------------------------- destruction
-  _markM(i) { if (i < this._mDirty[0]) this._mDirty[0] = i; if (i > this._mDirty[1]) this._mDirty[1] = i; }
-  _markB(i) { if (i < this._bDirty[0]) this._bDirty[0] = i; if (i > this._bDirty[1]) this._bDirty[1] = i; }
+  _markM(i) {
+    const part = this.meshes[this.chunkPart[i]]; part.proxyDirty = true;
+    if (!part.mesh) return;
+    const d = part.matrixDirty, local = this.chunkLocal[i];
+    if (local < d[0]) d[0] = local; if (local > d[1]) d[1] = local;
+  }
+  _markB(i) {
+    const part = this.meshes[this.chunkPart[i]]; if (!part.mesh) return;
+    const local = this.chunkLocal[i], d = part.burnDirty;
+    part.burnAttribute.array[local] = this.burnAttr.array[i];
+    if (local < d[0]) d[0] = local; if (local > d[1]) d[1] = local;
+  }
 
   removeChunk(i, ix = 0, iy = 0, iz = 0, debris = 2) {
     if (!this.alive[i]) return false;
-    this.alive[i] = 0; this.grid[this.gi(this.cx[i], this.cy[i], this.cz[i])] = -1;
-    this.mesh.setMatrixAt(i, ZERO); this._markM(i);
+    this.alive[i] = 0; this.grid.delete(this.gi(this.cx[i], this.cy[i], this.cz[i]));
+    const part = this.meshes[this.chunkPart[i]];
+    if (part.mesh) part.mesh.setMatrixAt(this.chunkLocal[i], ZERO);
+    this._markM(i);
     const b = this.cb[i]; this.buildings[b].alive--; this._dirtyB.add(b);
     this.score++;
     if (debris) {
@@ -528,7 +640,7 @@ export class City {
     const z0 = Math.max(0, Math.floor((c.z - r - OZ) / CH)), z1 = Math.min(GZ - 1, Math.floor((c.z + r - OZ) / CH));
     let n = 0; const rr = (r + CH * 0.5) ** 2;
     outer: for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
-      const i = this.grid[this.gi(x, y, z)]; if (i < 0) continue;
+      const i = this.grid.get(this.gi(x, y, z)) ?? -1; if (i < 0) continue;
       const dx = OX + (x + 0.5) * CH - c.x, dy = (y + 0.5) * CH - c.y, dz = OZ + (z + 0.5) * CH - c.z;
       const d2 = dx * dx + dy * dy + dz * dz; if (d2 > rr) continue;
       const d = Math.sqrt(d2) + 0.01, k = power * (1.2 - Math.min(1, d / (r + CH)));
@@ -547,7 +659,7 @@ export class City {
     const z0 = Math.max(0, Math.floor((c.z - r - OZ) / CH)), z1 = Math.min(GZ - 1, Math.floor((c.z + r - OZ) / CH));
     let hit = 0, broken = 0;
     for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
-      const i = this.grid[this.gi(x, y, z)]; if (i < 0) continue;
+      const i = this.grid.get(this.gi(x, y, z)) ?? -1; if (i < 0) continue;
       hit++;
       this.hp[i] -= dmg;
       const b = this.burnAttr.array;
@@ -574,7 +686,7 @@ export class City {
     const lim = Math.min(maxT, tg);
     for (let k = 0; k < 600 && t <= lim; k++) {
       if (x >= 0 && y >= 0 && z >= 0 && x < GX && y < GY && z < GZ) {
-        const i = this.grid[this.gi(x, y, z)];
+        const i = this.grid.get(this.gi(x, y, z)) ?? -1;
         if (i >= 0) { if (out) { out.index = i; out.t = t; } return t; }
       }
       if (tx < ty && tx < tz) { t = tx; tx += tdx; x += sx; }
@@ -603,7 +715,7 @@ export class City {
           if ((k === 0 && x === GX - 1) || (k === 1 && x === 0) ||
               (k === 2 && z === GZ - 1) || (k === 3 && z === 0) ||
               (k === 4 && y === GY - 1) || (k === 5 && y === 0)) continue;
-          const j = this.grid[base + neighbours[k]];
+          const j = this.grid.get(base + neighbours[k]) ?? -1;
           if (j >= 0 && this.cb[j] === b && marks[j] !== grounded) { marks[j] = grounded; stack[tail++] = j; }
         }
       }
@@ -623,7 +735,7 @@ export class City {
             if ((k === 0 && x === GX - 1) || (k === 1 && x === 0) ||
                 (k === 2 && z === GZ - 1) || (k === 3 && z === 0) ||
                 (k === 4 && y === GY - 1) || (k === 5 && y === 0)) continue;
-            const j = this.grid[base + neighbours[k]];
+            const j = this.grid.get(base + neighbours[k]) ?? -1;
             if (j >= 0 && this.cb[j] === b && marks[j] !== island && marks[j] !== grounded) { marks[j] = island; stack[tail++] = j; }
           }
         }
@@ -632,8 +744,10 @@ export class City {
         const debrisStep = Math.max(1, Math.ceil(tail / 1800));
         for (let q = 0; q < tail; q++) {
           const j = stack[q], x = OX + (this.cx[j] + 0.5) * CH, y = (this.cy[j] + 0.5) * CH, z = OZ + (this.cz[j] + 0.5) * CH;
-          this.alive[j] = 0; this.grid[this.gi(this.cx[j], this.cy[j], this.cz[j])] = -1;
-          this.mesh.setMatrixAt(j, ZERO); this._markM(j); B.alive--; this.score++;
+          this.alive[j] = 0; this.grid.delete(this.gi(this.cx[j], this.cy[j], this.cz[j]));
+          const part = this.meshes[this.chunkPart[j]];
+          if (part.mesh) part.mesh.setMatrixAt(this.chunkLocal[j], ZERO);
+          this._markM(j); B.alive--; this.score++;
           if (q % debrisStep === 0) {
             const col = B.color, burnt = 1 - 0.8 * this.burnAttr.array[j];
             this.spawnDebris(x, y, z, driftX + ((this.cy[j] - minY) * tiltX - (this.cz[j] - midZ) * spin) * CH, -2,
@@ -717,7 +831,7 @@ export class City {
             for (let y = Math.min(GY - 1, Math.floor(oldBottom / CH)); y >= Math.max(0, Math.floor(bottom / CH)); y--) {
               const top = (y + 1) * CH;
               if (oldBottom < top || bottom > top) continue;
-              const j = this.grid[this.gi(x, y, z)];
+              const j = this.grid.get(this.gi(x, y, z)) ?? -1;
               if (j < 0) continue;
               if (this.dHeavy[i] && V[p + 1] < -14 && impacts < 32 &&
                   this.removeChunk(j, V[p] * 0.3, -4, V[p + 2] * 0.3, 1)) {
@@ -767,6 +881,7 @@ export class City {
   // ----------------------------------------------------------------------- distant skyline
   _buildSkyline() {
     const R = rng(55), n = 420;
+    const skylineStart = HALF * Math.SQRT2 + 100;
     const geo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     const info = new Float32Array(n * 2), burn = new Float32Array(n);
     geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 2));
@@ -774,9 +889,9 @@ export class City {
     const mesh = new THREE.InstancedMesh(geo, this.buildMat, n);
     const m = new THREE.Matrix4(), c = new THREE.Color();
     for (let i = 0; i < n; i++) {
-      const a = R() * Math.PI * 2, d = 560 + R() * 900;
+      const a = R() * Math.PI * 2, d = skylineStart + R() * 900;
       const x = Math.cos(a) * d, z = Math.sin(a) * d;
-      const h = (20 + R() * 120) * (1 - (d - 560) / 1400 * 0.5), w = 20 + R() * 40;
+      const h = (20 + R() * 120) * (1 - (d - skylineStart) / 1400 * 0.5), w = 20 + R() * 40;
       m.makeScale(w, h, 20 + R() * 40).setPosition(x, 0, z); mesh.setMatrixAt(i, m);
       const st = h > 70 ? 0 : 1; info[i * 2] = st; info[i * 2 + 1] = R();
       const v = st ? 0.55 : 0.4; c.setRGB(v, v * 1.02, v * 1.08, THREE.SRGBColorSpace); mesh.setColorAt(i, c);
@@ -786,19 +901,23 @@ export class City {
   }
 
   // ----------------------------------------------------------------------- per frame
-  update(dt) {
+  update(dt, focus) {
+    this._streamDistricts(focus);
     this._collapseT += dt;
     if (this._dirtyB.size && this._collapseT > 0.12) { this._collapseT = 0; this._collapse(); }
     this._updateDebris(dt);
-    if (this._mDirty[1] >= 0) {
-      const a = this.mesh.instanceMatrix; a.clearUpdateRanges();
-      a.addUpdateRange(this._mDirty[0] * 16, (this._mDirty[1] - this._mDirty[0] + 1) * 16); a.needsUpdate = true;
-      this._mDirty[0] = Infinity; this._mDirty[1] = -1;
-    }
-    if (this._bDirty[1] >= 0) {
-      const a = this.burnAttr; a.clearUpdateRanges();
-      a.addUpdateRange(this._bDirty[0], this._bDirty[1] - this._bDirty[0] + 1); a.needsUpdate = true;
-      this._bDirty[0] = Infinity; this._bDirty[1] = -1;
+    for (const part of this.meshes) {
+      const m = part.matrixDirty, b = part.burnDirty;
+      if (part.mesh && m[1] >= 0) {
+        const a = part.mesh.instanceMatrix; a.clearUpdateRanges();
+        a.addUpdateRange(m[0] * 16, (m[1] - m[0] + 1) * 16); a.needsUpdate = true;
+        m[0] = Infinity; m[1] = -1;
+      }
+      if (part.mesh && b[1] >= 0) {
+        const a = part.burnAttribute; a.clearUpdateRanges();
+        a.addUpdateRange(b[0], b[1] - b[0] + 1); a.needsUpdate = true;
+        b[0] = Infinity; b[1] = -1;
+      }
     }
     scorch.t += dt;
     if (scorch.dirty && scorch.t > 0.3) { scorch.tex.needsUpdate = true; scorch.dirty = false; scorch.t = 0; }

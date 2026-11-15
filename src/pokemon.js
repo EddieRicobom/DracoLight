@@ -38,6 +38,9 @@ export class Pokemon {
     this.radius = models[kind].radius;
     this.previousForward = this.fwd.clone();
     this.bank = 0;
+    this.flightSpeed = 0;
+    this.boosting = false;
+    this.swimPhase = 0;
     this.root = new THREE.Group();
     scene.add(this.root);
     this.visible = true;
@@ -63,6 +66,16 @@ export class Pokemon {
         if (!object.isMesh) return;
         object.castShadow = true;
         object.receiveShadow = true;
+        if (kind === 'rayquaza') {
+          const toon = (source) => {
+            const material = new THREE.MeshToonMaterial({ color: source.color?.clone() || 0xffffff,
+              map: source.map || null, transparent: source.transparent, opacity: source.opacity,
+              side: source.side, alphaTest: source.alphaTest });
+            material.name = source.name;
+            return material;
+          };
+          object.material = Array.isArray(object.material) ? object.material.map(toon) : toon(object.material);
+        }
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of materials) {
           if (material?.emissive) this.flashMaterials.push({ material, base: material.emissive.clone() });
@@ -123,11 +136,15 @@ export class Pokemon {
     this.previousForward.copy(f);
     if (this.mixer) this.mixer.update(dt);
     if (this.kind === 'rayquaza') {
+      this.swimPhase += dt * (1.6 + Math.min(this.flightSpeed / 160, 1.7));
       this.bones.forEach((bone, i) => {
         bone.quaternion.copy(this.baseRotations[i]);
-        const wave = Math.sin(time * 2.5 - i * 0.48);
-        bone.rotateY(wave * (i < 17 ? 0.08 : 0.025));
-        if (i < 17) bone.rotateX(Math.cos(time * 1.7 - i * 0.38) * 0.025);
+        const wave = Math.sin(this.swimPhase - i * 0.48);
+        const body = i < 17;
+        const amplitude = this.boosting ? 0.052 : 0.08;
+        const turnFollow = body ? this.bank * Math.min(i / 17, 1) * 0.035 : 0;
+        bone.rotateY(wave * (body ? amplitude : 0.025) + turnFollow);
+        if (body) bone.rotateX(Math.cos(this.swimPhase * 0.8 - i * 0.38) * 0.025);
       });
       if (this.jawBone) this.jawBone.rotation.x = this.jaw * 0.35;
     }
