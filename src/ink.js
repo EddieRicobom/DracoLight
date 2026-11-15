@@ -24,29 +24,29 @@ export class InkTrail {
     geometry.setAttribute('aAlpha', new THREE.BufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
     geometry.setAttribute('aColor', new THREE.BufferAttribute(this.colors, 3).setUsage(THREE.DynamicDrawUsage));
     const uv = new Float32Array(this.maxPoints * 4);
-    const indices = [];
+    this.indices = new Uint16Array((this.maxPoints - 1) * 6);
     for (let i = 0; i < this.maxPoints; i++) {
-      uv[i * 4] = 0; uv[i * 4 + 1] = i / 4;
-      uv[i * 4 + 2] = 1; uv[i * 4 + 3] = i / 4;
-      if (i < this.maxPoints - 1) {
-        const j = i * 2;
-        indices.push(j, j + 1, j + 2, j + 2, j + 1, j + 3);
-      }
+      uv[i * 4] = 0; uv[i * 4 + 1] = i * .55;
+      uv[i * 4 + 2] = 1; uv[i * 4 + 3] = i * .55;
     }
     geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geometry.setIndex(indices);
+    geometry.setIndex(new THREE.BufferAttribute(this.indices, 1).setUsage(THREE.DynamicDrawUsage));
     geometry.setDrawRange(0, 0);
     this.mesh = new THREE.Mesh(geometry, new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
       vertexShader: `attribute float aAlpha; attribute vec3 aColor;
         varying float vAlpha; varying vec2 vUv; varying vec3 vColor;
         void main(){ vAlpha=aAlpha; vUv=uv; vColor=aColor;
           gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
       fragmentShader: `varying float vAlpha; varying vec2 vUv; varying vec3 vColor;
-        void main(){ float edge=abs(vUv.x*2.-1.);
-          float fleck=sin(vUv.y*121.)*sin(vUv.y*37.+vUv.x*7.);
-          float ink=1.-smoothstep(.65,1.,edge+.12*fleck);
-          gl_FragColor=vec4(vColor,ink*vAlpha); }`,
+        void main(){
+          float ripple=.075*sin(vUv.y*4.7)+.035*sin(vUv.y*11.3);
+          float edge=abs(vUv.x*2.-1.+ripple);
+          float ink=1.-smoothstep(.54,.98,edge);
+          float grain=.91+.09*sin(vUv.y*23.+vUv.x*16.)*sin(vUv.y*37.);
+          gl_FragColor=vec4(vColor,ink*grain*vAlpha);
+          #include <colorspace_fragment>
+        }`,
     }));
     this.mesh.frustumCulled = false;
     scene.add(this.mesh);
@@ -55,23 +55,34 @@ export class InkTrail {
     this.splashAlpha = new Float32Array(this.maxSplashes);
     this.splashColors = new Float32Array(this.maxSplashes * 3);
     this.splashSizes = new Float32Array(this.maxSplashes);
+    this.splashShapes = new Float32Array(this.maxSplashes);
     const splashGeometry = new THREE.BufferGeometry();
     splashGeometry.setAttribute('position', new THREE.BufferAttribute(this.splashPositions, 3).setUsage(THREE.DynamicDrawUsage));
     splashGeometry.setAttribute('aAlpha', new THREE.BufferAttribute(this.splashAlpha, 1).setUsage(THREE.DynamicDrawUsage));
     splashGeometry.setAttribute('aColor', new THREE.BufferAttribute(this.splashColors, 3).setUsage(THREE.DynamicDrawUsage));
     splashGeometry.setAttribute('aSize', new THREE.BufferAttribute(this.splashSizes, 1).setUsage(THREE.DynamicDrawUsage));
+    splashGeometry.setAttribute('aShape', new THREE.BufferAttribute(this.splashShapes, 1).setUsage(THREE.DynamicDrawUsage));
     splashGeometry.setDrawRange(0, 0);
     this.splashMesh = new THREE.Points(splashGeometry, new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false,
-      vertexShader: `attribute float aAlpha; attribute vec3 aColor; attribute float aSize;
-        varying float vAlpha; varying vec3 vColor;
-        void main(){ vAlpha=aAlpha; vColor=aColor;
+      transparent: true, depthWrite: false, toneMapped: false,
+      vertexShader: `attribute float aAlpha; attribute vec3 aColor; attribute float aSize; attribute float aShape;
+        varying float vAlpha; varying vec3 vColor; varying float vShape;
+        void main(){ vAlpha=aAlpha; vColor=aColor; vShape=aShape;
           vec4 viewPos=modelViewMatrix*vec4(position,1.);
           gl_Position=projectionMatrix*viewPos;
           gl_PointSize=clamp(aSize*260./max(1.,-viewPos.z),1.,22.); }`,
-      fragmentShader: `varying float vAlpha; varying vec3 vColor;
-        void main(){ float radius=length(gl_PointCoord-vec2(.5))*2.;
-          gl_FragColor=vec4(vColor,(1.-smoothstep(.62,1.,radius))*vAlpha); }`,
+      fragmentShader: `varying float vAlpha; varying vec3 vColor; varying float vShape;
+        void main(){
+          vec2 p=gl_PointCoord-vec2(.5);
+          float angle=vShape*6.28318;
+          vec2 axis=vec2(cos(angle),sin(angle));
+          vec2 q=vec2(dot(p,axis)*.8,dot(p,vec2(-axis.y,axis.x))*1.2);
+          float theta=atan(q.y,q.x);
+          float radius=length(q)*2.+.09*sin(theta*3.+vShape*11.);
+          float ink=1.-smoothstep(.68,1.,radius);
+          gl_FragColor=vec4(vColor,ink*vAlpha);
+          #include <colorspace_fragment>
+        }`,
     }));
     this.splashMesh.frustumCulled = false;
     scene.add(this.splashMesh);
@@ -105,6 +116,7 @@ export class InkTrail {
         born: this.clock,
         lifetime: 7 + Math.random() * 6,
         size: 1.5 + Math.random() * (boosting ? 3.5 : 2.5),
+        shape: Math.random(),
         color: this.color.clone(),
       });
     }
@@ -115,7 +127,12 @@ export class InkTrail {
     this.offset.crossVectors(direction, THREE.Object3D.DEFAULT_UP).normalize().multiplyScalar(this.lateralOffset);
     const tail = position.clone().addScaledVector(direction, -8).add(this.offset);
     if (!this.points.length || tail.distanceToSquared(this.points[this.points.length - 1].position) > 100) {
-      this.points.push({ position: tail, born: this.clock, width: boosting ? 4.5 : 2.5, color: this.color.clone() });
+      this.points.push({
+        position: tail,
+        born: this.clock,
+        width: (boosting ? 4.5 : 2.5) * (.78 + Math.random() * .44),
+        color: this.color.clone(),
+      });
       this.addSplashes(position, direction, speed, boosting);
     }
     while (this.points.length > this.maxPoints) this.points.shift();
@@ -127,7 +144,6 @@ export class InkTrail {
       this.tangent.subVectors(after, before).normalize();
       this.view.subVectors(this.camera.position, p.position).normalize();
       this.side.crossVectors(this.tangent, this.view).normalize();
-      const fade = 1;
       const width = p.width;
       for (let j = 0; j < 2; j++) {
         const k = (i * 2 + j) * 3, sign = j ? 1 : -1;
@@ -137,10 +153,23 @@ export class InkTrail {
         this.colors[k] = p.color.r;
         this.colors[k + 1] = p.color.g;
         this.colors[k + 2] = p.color.b;
-        this.alpha[i * 2 + j] = fade * .58;
+        this.alpha[i * 2 + j] = .68;
       }
     }
-    this.mesh.geometry.setDrawRange(0, Math.max(0, n - 1) * 6);
+    let indexCount = 0;
+    for (let i = 0; i < n - 1; i++) {
+      // A teleport, sharp frame skip or reset must not stretch ink into a sheet.
+      if (this.points[i].position.distanceToSquared(this.points[i + 1].position) > 80 * 80) continue;
+      const j = i * 2;
+      this.indices[indexCount++] = j;
+      this.indices[indexCount++] = j + 1;
+      this.indices[indexCount++] = j + 2;
+      this.indices[indexCount++] = j + 2;
+      this.indices[indexCount++] = j + 1;
+      this.indices[indexCount++] = j + 3;
+    }
+    this.mesh.geometry.setDrawRange(0, indexCount);
+    this.mesh.geometry.index.needsUpdate = true;
     this.mesh.geometry.attributes.position.needsUpdate = true;
     this.mesh.geometry.attributes.aAlpha.needsUpdate = true;
     this.mesh.geometry.attributes.aColor.needsUpdate = true;
@@ -158,6 +187,7 @@ export class InkTrail {
       this.splashColors[k + 2] = splash.color.b;
       this.splashAlpha[active] = .75;
       this.splashSizes[active] = splash.size;
+      this.splashShapes[active] = splash.shape;
       this.splashes[active] = splash;
       active++;
     }

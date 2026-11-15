@@ -108,10 +108,70 @@ export class FX {
       this.speedRings.push({ mesh, age: 0, delay: i * 0.08 });
     }
     this.speedDirection = new THREE.Vector3(0, 0, 1);
+    this.shockDirection = new THREE.Vector3(0, 0, 1);
     this.ringNormal = new THREE.Vector3(0, 0, 1);
     this.speedOrigin = new THREE.Vector3();
     this.speedSupersonic = false;
     this.speedWakeTime = 0;
+    // A single screen-space draw call gives a sense of speed without covering the aim point.
+    const streakGeometry = new THREE.BufferGeometry();
+    const streakData = new Float32Array(28 * 6 * 4);
+    const streakIndices = new Uint16Array(28 * 12);
+    for (let i = 0; i < 28; i++) {
+      const angle = (i + (i % 3) * .29) * Math.PI * 2 / 28;
+      const phase = (i * .61803398875) % 1;
+      for (let row = 0; row < 3; row++) for (let side = 0; side < 2; side++) {
+        const k = (i * 6 + row * 2 + side) * 4;
+        streakData[k] = angle;
+        streakData[k + 1] = phase;
+        streakData[k + 2] = row * .5;
+        streakData[k + 3] = side ? 1 : -1;
+      }
+      const v = i * 6, q = i * 12;
+      streakIndices.set([v,v+1,v+2,v+2,v+1,v+3,v+2,v+3,v+4,v+4,v+3,v+5],q);
+    }
+    streakGeometry.setAttribute('aStreak', new THREE.BufferAttribute(streakData, 4));
+    streakGeometry.setIndex(new THREE.BufferAttribute(streakIndices, 1));
+    this.speedStreaks = new THREE.Mesh(streakGeometry, new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uPower: { value: 0 }, uDive: { value: 0 } },
+      transparent: true, depthTest: false, depthWrite: false,
+      blending: THREE.AdditiveBlending, toneMapped: false,
+      vertexShader: `attribute vec4 aStreak;
+        uniform float uTime; uniform float uPower; uniform float uDive;
+        varying float vAlpha; varying float vDive;
+        void main(){
+          float flow=fract(aStreak.y+uTime*(.55+uPower*1.5));
+          vec2 radial=vec2(cos(aStreak.x),sin(aStreak.x));
+          vec2 across=vec2(-radial.y,radial.x);
+          float base=.57+flow*.62;
+          float length=(.045+uPower*.20+uDive*.055)*(.5+flow*.5);
+          vec2 xy=radial*(base+aStreak.z*length)
+            +across*aStreak.w*(.0025+uPower*.0025);
+          gl_Position=vec4(xy,0.,1.);
+          vAlpha=uPower*(1.-abs(aStreak.z*2.-1.))*(.24+flow*.18);
+          vDive=uDive;
+        }`,
+      fragmentShader: `varying float vAlpha; varying float vDive;
+        void main(){
+          vec3 color=mix(vec3(.42,.78,1.),vec3(1.,.69,.36),vDive*.65);
+          gl_FragColor=vec4(color,vAlpha);
+        }`,
+    }));
+    this.speedStreaks.visible = false;
+    this.speedStreaks.frustumCulled = false;
+    this.speedStreaks.renderOrder = 50;
+    scene.add(this.speedStreaks);
+    this.speedShockwaves = [];
+    for (let i = 0; i < 3; i++) {
+      const mesh = new THREE.Mesh(ringGeometry, new THREE.MeshBasicMaterial({
+        color: 0xbfeaff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+        depthWrite: false, toneMapped: false,
+      }));
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      this.speedShockwaves.push({ mesh, age: 0, strength: 0 });
+    }
   }
 
   // speedMps is the actual displacement per second, including strafing and climbing.
@@ -120,9 +180,19 @@ export class FX {
     if (!active || !Number.isFinite(speedMps) || dt <= 0) {
       this.speedSupersonic = false;
       this.speedWakeTime = 0;
+      this.speedStreaks.visible = false;
+      this.speedStreaks.material.uniforms.uPower.value = 0;
       for (const ring of this.speedRings) ring.mesh.visible = false;
       return;
     }
+    const uniforms = this.speedStreaks.material.uniforms;
+    const target = Math.max(0, Math.min(1, (speedMps - 145) / 260));
+    const dive = Math.max(0, Math.min(1, -direction.y * 1.5));
+    const follow = 1 - Math.exp(-Math.min(dt, .05) * 5);
+    uniforms.uPower.value += (target - uniforms.uPower.value) * follow;
+    uniforms.uDive.value += (dive - uniforms.uDive.value) * follow;
+    uniforms.uTime.value += Math.min(dt, .05);
+    this.speedStreaks.visible = uniforms.uPower.value > .025;
     if (!this.speedSupersonic && speedMps >= 343) {
       this.speedSupersonic = true;
       this.speedDirection.copy(direction).normalize();
@@ -160,6 +230,21 @@ export class FX {
       ring.mesh.scale.setScalar(5 + t * 20);
       ring.mesh.material.opacity = 0.34 * (1 - t) * (1 - t);
     }
+  }
+
+  // Visual only. Call when braking sharply or pulling out of a dive; strength is 0..1.
+  flightShockwave(position, direction, strength = 1) {
+    const power = Math.max(0, Math.min(1, strength));
+    if (power <= 0) return;
+    const wave = this.speedShockwaves.find(item => !item.mesh.visible) || this.speedShockwaves[0];
+    wave.age = 0;
+    wave.strength = power;
+    wave.mesh.position.copy(position);
+    this.shockDirection.copy(direction).normalize();
+    wave.mesh.quaternion.setFromUnitVectors(this.ringNormal, this.shockDirection);
+    wave.mesh.scale.setScalar(4);
+    wave.mesh.material.opacity = .26 * power;
+    wave.mesh.visible = true;
   }
 
   light(pos, color, intensity, dur, dist = 140) {
@@ -304,6 +389,14 @@ export class FX {
       w.t += dt; const k = w.t / w.dur;
       if (k >= 1) { w.m.visible = false; continue; }
       w.m.scale.setScalar(w.r * (0.2 + Math.sqrt(k))); w.m.material.uniforms.uA.value = (1 - k) * (1 - k);
+    }
+    for (const wave of this.speedShockwaves) {
+      if (!wave.mesh.visible) continue;
+      wave.age += dt;
+      const t = wave.age / .65;
+      if (t >= 1) { wave.mesh.visible = false; continue; }
+      wave.mesh.scale.setScalar(4 + 38 * Math.sqrt(t));
+      wave.mesh.material.opacity = .26 * wave.strength * (1 - t) * (1 - t);
     }
     this.shake *= Math.exp(-4 * dt);
   }

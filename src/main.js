@@ -6,6 +6,9 @@ import { createUrbanDetails } from './urban.js';
 import { createPolyProps } from './polyprops.js';
 import { FX } from './fx.js';
 import { InkTrail } from './ink.js';
+import { createTouchControls } from './touch.js';
+import { advanceDiveSpeed, advanceDiveImpact } from './dive.js';
+import { PaintTornado } from './tornado.js';
 import { clamp, damp, turnToward, U } from './util.js';
 import { createSky, createVisualPipeline } from './visual.js';
 
@@ -26,7 +29,8 @@ scene.background = new THREE.Color(0x34202a);
 scene.fog = new THREE.FogExp2(0x8d554b, 0.0017);
 const camera = new THREE.PerspectiveCamera(70, 1, 1, 30000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-const maxPixelRatio = Math.min(devicePixelRatio || 1, 1.25);
+const touchDevice = matchMedia('(pointer: coarse)').matches;
+const maxPixelRatio = Math.min(devicePixelRatio || 1, touchDevice ? 0.85 : 1.25);
 let renderPixelRatio = maxPixelRatio;
 renderer.setPixelRatio(renderPixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -38,7 +42,7 @@ scene.add(new THREE.HemisphereLight(0x8da9d2, 0x48302e, 1.55));
 const sun = new THREE.DirectionalLight(0xffb88a, 3.2);
 sun.position.set(-180, 260, 130);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(touchDevice ? 1024 : 2048, touchDevice ? 1024 : 2048);
 sun.shadow.camera.left = sun.shadow.camera.bottom = -420;
 sun.shadow.camera.right = sun.shadow.camera.top = 420;
 sun.shadow.camera.near = 1;
@@ -57,6 +61,7 @@ const composer = createVisualPipeline(renderer, scene, camera);
 const fx = new FX(scene, camera);
 const inkLeft = new InkTrail(scene, camera, -9);
 const inkRight = new InkTrail(scene, camera, 9);
+const tornado = new PaintTornado(scene);
 const paintColor = $('paintColor');
 const paintPresets = document.querySelectorAll('input[name="paintPreset"]');
 function choosePaint(color) {
@@ -74,6 +79,7 @@ paintColor.addEventListener('input', () => {
 $('clearPaint').addEventListener('click', () => {
   inkLeft.clear();
   inkRight.clear();
+  tornado.clear();
   $('status').textContent = 'Tinta removida.';
 });
 choosePaint(paintColor.value);
@@ -108,8 +114,10 @@ const FLIGHT = Object.freeze({
 let state = 'menu', elapsed = 0, stamina = 100;
 let yaw = Math.PI, pitch = 0, speed = FLIGHT.cruise;
 let actualSpeed = FLIGHT.cruise;
+let diveImpact = null;
 let collisionTime = 0, wakeTime = 0, fpsTime = 0, frames = 0;
 const keys = new Set();
+const touch = createTouchControls({ onPause: () => pause() });
 let activeGamepad = null, gamepadStartHeld = false, draggingMouse = false;
 const stick = (value) => Math.abs(value || 0) < 0.14 ? 0 : Math.sign(value) * (Math.abs(value) - 0.14) / 0.86;
 function currentGamepad() {
@@ -147,18 +155,21 @@ resize();
 
 function start() {
   audio.start().catch(() => {});
+  touch.reset();
   state = 'playing';
   menu.classList.add('off');
   hud.classList.add('on');
   // A controller or mouse drag can still steer when pointer lock is unavailable.
-  canvas.requestPointerLock?.()?.catch?.(() => {});
+  if (!touchDevice) canvas.requestPointerLock?.()?.catch?.(() => {});
 }
 function pause() {
   if (state !== 'playing') return;
   state = 'paused';
   audio.setFlight(0, false);
   fx.updateSpeed(0, player.pos, player.fwd, 0, false);
+  diveImpact = null;
   keys.clear();
+  touch.reset();
   draggingMouse = false;
   document.exitPointerLock?.();
   menu.classList.remove('off');
@@ -178,10 +189,10 @@ Promise.resolve().then(() => {
 });
 go.addEventListener('click', start);
 canvas.addEventListener('click', () => {
-  if (state === 'playing' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.()?.catch?.(() => {});
+  if (!touchDevice && state === 'playing' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.()?.catch?.(() => {});
 });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== canvas && state === 'playing' && !currentGamepad() && !draggingMouse) pause();
+  if (!touchDevice && document.pointerLockElement !== canvas && state === 'playing' && !currentGamepad() && !draggingMouse) pause();
 });
 document.addEventListener('keydown', (e) => {
   if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
@@ -215,27 +226,38 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('blur', () => { keys.clear(); if (state === 'playing') pause(); });
 
 function updateFlight(dt, pad) {
-  yaw -= stick(pad?.axes[2]) * dt * 2.4;
-  pitch = clamp(pitch - stick(pad?.axes[3]) * dt * 2.1, -1.35, 1.35);
+  yaw -= (stick(pad?.axes[2]) + touch.state.rightX) * dt * 2.4;
+  pitch = clamp(pitch - (stick(pad?.axes[3]) + touch.state.rightY) * dt * 2.1, -1.35, 1.35);
   const f = player.fwd;
   desired.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   turnToward(f, desired, dt * FLIGHT.turnRate);
   side.crossVectors(f, THREE.Object3D.DEFAULT_UP).normalize();
-  const boosting = (keys.has('ShiftLeft') || keys.has('ShiftRight') || buttonDown(pad, 7)) && stamina > 1;
-  const throttle = stick(pad?.axes[1]);
+  const boosting = (keys.has('ShiftLeft') || keys.has('ShiftRight') || buttonDown(pad, 7) || touch.state.boost) && stamina > 1;
+  const throttle = stick(pad?.axes[1]) + touch.state.leftY;
+  const ascending = keys.has('Space') || buttonDown(pad, 0) || touch.state.ascend;
+  const descending = keys.has('KeyC') || buttonDown(pad, 1) || touch.state.descend;
+  let verticalDirection = clamp(f.y + (ascending ? 0.75 : 0) - (descending ? 0.75 : 0), -1, 1);
+  if ((player.pos.y <= 7.05 && verticalDirection < 0) || (player.pos.y >= FLIGHT.ceiling && verticalDirection > 0)) verticalDirection = 0;
+  const braking = keys.has('KeyS') || throttle > 0.25;
   const baseSpeed = boosting ? FLIGHT.boost : keys.has('KeyW') || throttle < -0.25 ? FLIGHT.accelerate :
-    keys.has('KeyS') || throttle > 0.25 ? FLIGHT.brake : FLIGHT.cruise;
+    braking ? FLIGHT.brake : FLIGHT.cruise;
   const wanted = baseSpeed * altitudeSpeed(player.pos.y);
-  speed += (wanted - speed) * damp(boosting ? 3.8 : 2.8, dt);
+  speed = advanceDiveSpeed(speed, dt, { targetSpeed: wanted, verticalDirection, braking, response: boosting ? 3.8 : 2.8 });
+  diveImpact = advanceDiveImpact(diveImpact, { speed, verticalDirection, braking });
+  if (diveImpact.triggered) {
+    fx.flightShockwave(player.pos, f, clamp(speed / 1000, 0.35, 1));
+    fx.shake = Math.max(fx.shake, 0.8);
+    audio.play('impact');
+  }
   stamina = clamp(stamina + (boosting ? -FLIGHT.boostDrain : FLIGHT.recovery) * dt, 0, 100);
 
   old.copy(player.pos);
   player.pos.addScaledVector(f, speed * dt);
   if (keys.has('KeyA')) player.pos.addScaledVector(side, -speed * dt * 0.58);
   if (keys.has('KeyD')) player.pos.addScaledVector(side, speed * dt * 0.58);
-  player.pos.addScaledVector(side, stick(pad?.axes[0]) * speed * dt * 0.58);
-  if (keys.has('Space') || buttonDown(pad, 0)) player.pos.y += speed * dt * 0.75;
-  if (keys.has('KeyC') || buttonDown(pad, 1)) player.pos.y -= speed * dt * 0.75;
+  player.pos.addScaledVector(side, (stick(pad?.axes[0]) + touch.state.leftX) * speed * dt * 0.58);
+  if (ascending) player.pos.y += speed * dt * 0.75;
+  if (descending) player.pos.y -= speed * dt * 0.75;
   player.pos.y = clamp(player.pos.y, 7, FLIGHT.ceiling);
   const bound = flightBoundary(player.pos.y);
   player.pos.x = clamp(player.pos.x, -bound, bound);
@@ -277,6 +299,7 @@ function updateFlight(dt, pad) {
   player.update(dt, elapsed);
   inkLeft.update(dt, player.pos, f, speed, boosting);
   inkRight.update(dt, player.pos, f, speed, boosting);
+  tornado.update(dt, player.pos, f, actualSpeed, paintColor.value);
 }
 
 function updateCamera(dt) {

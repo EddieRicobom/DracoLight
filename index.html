@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Draco Light</title>
 <style>
   html,body{margin:0;height:100%;background:#101f28;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#fff0d8}
@@ -98,6 +98,29 @@
   #paintColor:focus-visible,#clearPaint:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
   @media (max-width:600px),(max-height:650px){.paint{margin-bottom:10px;padding:8px 10px}.paint p{margin-bottom:8px!important}.paint-options{gap:7px}}
   @media (prefers-reduced-motion:reduce){#hud,#menu,#cross,#go{transition:none}}
+  #touchControls{display:none}
+  @media (pointer:coarse){
+    #hud.on ~ #touchControls{display:block}
+    #touchControls{position:fixed;inset:0;z-index:4;pointer-events:none;user-select:none;-webkit-user-select:none;touch-action:none}
+    .touch-stick,.touch-button{position:absolute;box-sizing:border-box;pointer-events:auto;touch-action:none;-webkit-tap-highlight-color:transparent;color:#fff0d8;border:1px solid rgba(255,221,188,.55);background:rgba(20,43,51,.62);box-shadow:0 4px 18px rgba(0,0,0,.3)}
+    .touch-stick{bottom:max(18px,env(safe-area-inset-bottom));width:clamp(86px,19vw,124px);aspect-ratio:1;border-radius:50%}
+    #touchLeft{left:max(18px,env(safe-area-inset-left))}
+    #touchRight{right:max(18px,env(safe-area-inset-right))}
+    .touch-knob{position:absolute;left:50%;top:50%;width:40%;aspect-ratio:1;transform:translate(-50%,-50%);border:1px solid rgba(255,230,200,.8);border-radius:50%;background:rgba(255,221,188,.24);pointer-events:none}
+    .touch-stick-label{position:absolute;left:0;right:0;top:100%;padding-top:3px;text-align:center;font:600 9px system-ui;letter-spacing:.08em;text-transform:uppercase;pointer-events:none}
+    .touch-button{min-width:48px;min-height:48px;border-radius:50%;font:700 13px system-ui;cursor:pointer}
+    .touch-button:active,.touch-button.active{background:rgba(246,166,95,.75);color:#172c32}
+    .touch-button:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
+    #touchAscend{right:max(24px,env(safe-area-inset-right));bottom:calc(max(18px,env(safe-area-inset-bottom)) + clamp(86px,19vw,124px) + 14px)}
+    #touchDescend{right:calc(max(24px,env(safe-area-inset-right)) + 56px);bottom:calc(max(18px,env(safe-area-inset-bottom)) + clamp(86px,19vw,124px) + 14px)}
+    #touchBoost{left:50%;bottom:max(20px,env(safe-area-inset-bottom));transform:translateX(-50%);width:70px;height:70px}
+    #touchPause{left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));border-radius:10px}
+    #menu .keys,#menu .desktop-help{display:none}
+    #menu .mobile-help{display:block}
+    #hud.on .bars{left:calc(max(12px,env(safe-area-inset-left)) + 58px);top:max(12px,env(safe-area-inset-top));bottom:auto;width:min(180px,30vw);padding:8px 10px 1px}
+    #hud.on #score{right:max(12px,env(safe-area-inset-right));top:calc(max(12px,env(safe-area-inset-top)) + 48px);bottom:auto}
+  }
+  .mobile-help{display:none}
 </style>
 </head>
 <body>
@@ -107,6 +130,14 @@
   <div class="bars"><div class="lbl">Impulso</div><div class="bar" id="stP"><i></i></div></div>
   <div id="score">Destruição<br><b id="sc">0</b></div>
   <div id="fps"></div>
+</div>
+<div id="touchControls" aria-label="Controles de toque">
+  <div id="touchLeft" class="touch-stick" role="application" aria-label="Movimentar: deslize o dedo"><span id="touchLeftKnob" class="touch-knob"></span><span class="touch-stick-label" aria-hidden="true">Mover</span></div>
+  <div id="touchRight" class="touch-stick" role="application" aria-label="Direção do voo: deslize o dedo"><span id="touchRightKnob" class="touch-knob"></span><span class="touch-stick-label" aria-hidden="true">Direção</span></div>
+  <button id="touchAscend" class="touch-button" type="button" aria-label="Subir">Subir</button>
+  <button id="touchDescend" class="touch-button" type="button" aria-label="Descer">Descer</button>
+  <button id="touchBoost" class="touch-button" type="button" aria-label="Impulso">Impulso</button>
+  <button id="touchPause" class="touch-button" type="button" aria-label="Pausar">Ⅱ</button>
 </div>
 <div id="menu">
   <h1>赤龍</h1>
@@ -120,10 +151,11 @@
     <span><kbd>Shift</kbd></span><span>impulso / atravessar prédios</span>
     <span><kbd>Esc</kbd></span><span>pausar</span>
   </div>
-  <p>Controle: analógico esquerdo movimenta · gatilho direito impulsiona · Start pausa.</p>
+  <p class="desktop-help">Controle: analógico esquerdo movimenta · gatilho direito impulsiona · Start pausa.</p>
+  <p class="mobile-help">Use os direcionais de toque para voar. Toque em pausa para escolher a tinta.</p>
   <fieldset class="paint" id="paintControls">
     <legend>Tinta</legend>
-    <p>Escolha uma cor. Durante o voo, pressione Esc para abrir a paleta.</p>
+    <p>Escolha uma cor. Pause para abrir a paleta. Voe em círculos para criar um tornado de tinta.</p>
     <div class="paint-options" role="radiogroup" aria-label="Cores de tinta">
       <label class="paint-option" title="Vermelho"><input type="radio" name="paintPreset" value="#ef4444" aria-label="Vermelho" checked><span style="--paint-color:#ef4444"></span></label>
       <label class="paint-option" title="Laranja"><input type="radio" name="paintPreset" value="#f97316" aria-label="Laranja"><span style="--paint-color:#f97316"></span></label>
