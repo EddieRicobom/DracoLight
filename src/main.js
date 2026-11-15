@@ -60,6 +60,15 @@ const inkRight = new InkTrail(scene, camera, 9);
 const city = new City(scene, fx);
 const urban = createUrbanDetails(scene, city);
 const polyProps = createPolyProps(scene, city);
+const resetButton = $('resetCity');
+resetButton.addEventListener('click', () => {
+  city.reset();
+  urban.reset();
+  polyProps.reset();
+  fx.burning.length = 0;
+  $('sc').textContent = '0';
+  $('status').textContent = 'Cidade reconstruída.';
+});
 const player = new Dragon(scene, PALETTES.red);
 player.pos.set(0, 115, 115);
 player.fwd.set(0, 0, -1);
@@ -71,13 +80,14 @@ const FLIGHT = Object.freeze({
   cruise: 95,
   accelerate: 160,
   brake: 42,
-  boost: 320,
+  boost: 400,
   turnRate: 5.8,
   boostDrain: 20,
   recovery: 18,
 });
 let state = 'menu', elapsed = 0, stamina = 100;
 let yaw = Math.PI, pitch = 0, speed = FLIGHT.cruise;
+let actualSpeed = FLIGHT.cruise;
 let collisionTime = 0, wakeTime = 0, fpsTime = 0, frames = 0;
 const keys = new Set();
 let activeGamepad = null, gamepadStartHeld = false, draggingMouse = false;
@@ -127,6 +137,7 @@ function pause() {
   if (state !== 'playing') return;
   state = 'paused';
   audio.setFlight(0, false);
+  fx.updateSpeed(0, player.pos, player.fwd, 0, false);
   keys.clear();
   draggingMouse = false;
   document.exitPointerLock?.();
@@ -213,6 +224,7 @@ function updateFlight(dt, pad) {
   // Sweep the path, so a fast boost cannot skip straight through a building.
   motion.subVectors(player.pos, old);
   const distance = motion.length();
+  actualSpeed = dt > 0 ? distance / dt : 0;
   if (distance > 0) {
     motion.multiplyScalar(1 / distance);
     const wallDistance = city.raycast(old, motion, distance, ray);
@@ -238,7 +250,8 @@ function updateFlight(dt, pad) {
     wakeTime = 0.035;
     fx.flightWake(tmp.copy(player.pos).addScaledVector(f, -15), f);
   }
-  audio.setFlight(speed);
+  audio.setFlight(actualSpeed);
+  fx.updateSpeed(dt, player.pos, f, actualSpeed);
   player.flightSpeed = speed;
   player.boosting = boosting;
   player.update(dt, elapsed);
@@ -265,7 +278,7 @@ function updateCamera(dt) {
 function updateHud(dt) {
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
-  readouts.textContent = `Velocidade: ${Math.round(speed * 3.6).toLocaleString('pt-BR')} km/h · Altitude: ${Math.round(player.pos.y).toLocaleString('pt-BR')} m`;
+  readouts.textContent = `Velocidade: ${Math.round(actualSpeed * 3.6).toLocaleString('pt-BR')} km/h · Altitude: ${Math.round(player.pos.y).toLocaleString('pt-BR')} m`;
   fpsTime += dt;
   frames++;
   if (fpsTime > 0.5) {

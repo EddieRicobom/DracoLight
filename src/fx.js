@@ -93,6 +93,73 @@ export class FX {
     const sg = new THREE.SphereGeometry(1, 32, 16);
     for (let i = 0; i < 8; i++) { const m = new THREE.Mesh(sg, swMat()); m.visible = false; m.frustumCulled = false; scene.add(m); this.waves.push({ m, t: 0, dur: 1, r: 10 }); }
     this.tmp = new THREE.Vector3();
+    // A small, fixed set of rings marks the moment the player crosses Mach 1.
+    // They are intentionally translucent so the view ahead stays readable.
+    this.speedRings = [];
+    const ringGeometry = new THREE.TorusGeometry(1, 0.025, 5, 48);
+    for (let i = 0; i < 2; i++) {
+      const mesh = new THREE.Mesh(ringGeometry, new THREE.MeshBasicMaterial({
+        color: i ? 0x93e6ff : 0xffffff, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+      }));
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      this.speedRings.push({ mesh, age: 0, delay: i * 0.08 });
+    }
+    this.speedDirection = new THREE.Vector3(0, 0, 1);
+    this.ringNormal = new THREE.Vector3(0, 0, 1);
+    this.speedOrigin = new THREE.Vector3();
+    this.speedSupersonic = false;
+    this.speedWakeTime = 0;
+  }
+
+  // speedMps is the actual displacement per second, including strafing and climbing.
+  // Call once per active flight frame; passing active=false clears the crossing state.
+  updateSpeed(dt, position, direction, speedMps, active = true) {
+    if (!active || !Number.isFinite(speedMps) || dt <= 0) {
+      this.speedSupersonic = false;
+      this.speedWakeTime = 0;
+      for (const ring of this.speedRings) ring.mesh.visible = false;
+      return;
+    }
+    if (!this.speedSupersonic && speedMps >= 343) {
+      this.speedSupersonic = true;
+      this.speedDirection.copy(direction).normalize();
+      this.speedOrigin.copy(position);
+      for (const ring of this.speedRings) { ring.age = -ring.delay; ring.mesh.visible = true; }
+    } else if (speedMps < 310) {
+      this.speedSupersonic = false;
+    }
+
+    // Bounded emission: at most three particles per 45 ms, even after a long frame.
+    this.speedWakeTime -= dt;
+    if (speedMps > 190 && this.speedWakeTime <= 0) {
+      this.speedWakeTime = 0.045;
+      const strength = Math.min(1, (speedMps - 190) / 250);
+      const count = speedMps >= 343 ? 3 : 1;
+      const A = this.add;
+      for (let i = 0; i < count; i++) {
+        const back = 10 + Math.random() * 12;
+        const spread = (2 + strength * 4) * (Math.random() - 0.5);
+        A.spawn(FROST, position.x - direction.x * back + spread,
+          position.y - direction.y * back + (Math.random() - 0.5) * 4,
+          position.z - direction.z * back + (Math.random() - 0.5) * 4,
+          -direction.x * 12, -direction.y * 12, -direction.z * 12,
+          0.28 + strength * 0.2, 0.4, 1.6 + strength * 1.4);
+      }
+    }
+    for (const ring of this.speedRings) {
+      if (!ring.mesh.visible) continue;
+      ring.age += dt;
+      if (ring.age < 0) continue;
+      if (ring.age >= 0.55) { ring.mesh.visible = false; continue; }
+      const t = ring.age / 0.55;
+      ring.mesh.position.copy(this.speedOrigin).addScaledVector(this.speedDirection, -t * 38);
+      ring.mesh.quaternion.setFromUnitVectors(this.ringNormal, this.speedDirection);
+      ring.mesh.scale.setScalar(5 + t * 20);
+      ring.mesh.material.opacity = 0.34 * (1 - t) * (1 - t);
+    }
   }
 
   light(pos, color, intensity, dur, dist = 140) {

@@ -568,6 +568,7 @@ export class City {
     });
     car.castShadow = true; car.receiveShadow = true; this.scene.add(car);
     this.propMeshes = [[trunk, crown], [pole, head], [car]];
+    this.propInitialMatrices = this.propMeshes.map(group => group.map(mesh => new Float32Array(mesh.instanceMatrix.array)));
     this.carCols = cars.map(([, , , r]) => carCols[(r * carCols.length) | 0]);
   }
   _addProp(type, idx, x, z, h) {
@@ -782,6 +783,53 @@ export class City {
     this.dS = new Float32Array(N); this.dL = new Float32Array(N); this.dState = new Uint8Array(N); this.dHeavy = new Uint8Array(N);
     this.dRest = new Int32Array(N); // supporting chunk index + 1, or zero for the ground
     this.dNext = 0; this.dHigh = 0; this.dLive = 0;
+  }
+  // Restore the original city in place, including districts currently represented by proxies.
+  reset() {
+    this.grid.clear();
+    const burn = this.burnAttr.array;
+    burn.fill(0);
+    for (let i = 0; i < this.alive.length; i++) {
+      this.alive[i] = 1;
+      this.hp[i] = this.lots[this.cb[i]].style === 0 ? 70 : 110;
+      this.grid.set(this.gi(this.cx[i], this.cy[i], this.cz[i]), i);
+    }
+    for (const building of this.buildings) building.alive = building.cells.length;
+    this.score = 0;
+    this._dirtyB.clear(); this._collapseT = 0;
+
+    const matrix = new THREE.Matrix4();
+    for (const part of this.meshes) {
+      part.proxyDirty = true;
+      if (part.mesh) {
+        part.ids.forEach((i, local) => {
+          matrix.makeTranslation(OX + (this.cx[i] + 0.5) * CH, (this.cy[i] + 0.5) * CH, OZ + (this.cz[i] + 0.5) * CH);
+          part.mesh.setMatrixAt(local, matrix);
+        });
+        part.mesh.instanceMatrix.clearUpdateRanges();
+        part.mesh.instanceMatrix.needsUpdate = true;
+        part.burnAttribute.array.fill(0);
+        part.burnAttribute.clearUpdateRanges();
+        part.burnAttribute.needsUpdate = true;
+      }
+      part.matrixDirty = [Infinity, -1]; part.burnDirty = [Infinity, -1];
+      this._refreshProxy(part);
+    }
+    this.props.forEach(prop => { prop.alive = true; });
+    this.propMeshes.forEach((group, type) => group.forEach((mesh, index) => {
+      mesh.instanceMatrix.array.set(this.propInitialMatrices[type][index]);
+      mesh.instanceMatrix.clearUpdateRanges();
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+    }));
+    this.dState.fill(0);
+    this.dRest.fill(0);
+    this.dNext = this.dHigh = this.dLive = 0;
+    this.dMesh.count = 0;
+    scorch.ctx.fillStyle = '#000';
+    scorch.ctx.fillRect(0, 0, scorch.canvas.width, scorch.canvas.height);
+    scorch.tex.needsUpdate = true;
+    scorch.dirty = false; scorch.t = 0;
   }
   spawnDebris(x, y, z, vx, vy, vz, s, r, g, b, heavy = false) {
     // ring allocation: overwrite the oldest slot

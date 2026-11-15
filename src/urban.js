@@ -74,25 +74,30 @@ export function createUrbanDetails(scene, city) {
       matrix.makeScale(part.sx, part.sy, part.sz).setPosition(part.x, part.y, part.z);
       mesh.setMatrixAt(i, matrix);
       mesh.setColorAt(i, color.setScalar(part.tint));
-      supports.push({ mesh, index: i, chunk: part.support, visible: true });
+      supports.push({ mesh, index: i, chunk: part.support, visible: true, matrix: matrix.clone() });
     });
     scene.add(mesh);
     return mesh;
   });
 
   let elapsed = 0;
+  function sync() {
+    for (const item of supports) {
+      const visible = !!city.alive[item.chunk];
+      if (item.visible === visible) continue;
+      item.visible = visible;
+      item.mesh.setMatrixAt(item.index, visible ? item.matrix : matrix.makeScale(0, 0, 0));
+      item.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
   return {
     update(dt) {
       elapsed += dt;
       if (elapsed < 0.2) return;
       elapsed = 0;
-      for (const item of supports) {
-        if (!item.visible || city.alive[item.chunk]) continue;
-        item.visible = false;
-        item.mesh.setMatrixAt(item.index, matrix.makeScale(0, 0, 0));
-        item.mesh.instanceMatrix.needsUpdate = true;
-      }
+      sync();
     },
+    reset() { elapsed = 0; sync(); },
     dispose() {
       for (const mesh of meshes) {
         scene.remove(mesh);

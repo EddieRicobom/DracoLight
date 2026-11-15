@@ -79,22 +79,35 @@ export function createPolyProps(scene, city) {
     return meshes.length;
   });
 
+  function sync() {
+    for (const { mesh, items } of meshes) {
+      let changed = false;
+      const matrix = new THREE.Matrix4(), quaternion = new THREE.Quaternion();
+      const position = new THREE.Vector3(), scale = new THREE.Vector3(2.1, 2.1, 2.1);
+      const axis = new THREE.Vector3(0, 1, 0);
+      items.forEach((item, index) => {
+        const visible = !!city.alive[item.support];
+        if (item.visible === visible) return;
+        item.visible = visible;
+        if (visible) {
+          quaternion.setFromAxisAngle(axis, item.rotation);
+          matrix.compose(position.set(item.x, item.y, item.z), quaternion, scale);
+          mesh.setMatrixAt(index, matrix);
+        } else mesh.setMatrixAt(index, ZERO);
+        changed = true;
+      });
+      if (changed) mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
   return {
     ready,
     update(dt) {
       if (disposed || (elapsed += dt) < 0.2) return;
       elapsed = 0;
-      for (const { mesh, items } of meshes) {
-        let changed = false;
-        items.forEach((item, index) => {
-          if (!item.visible || city.alive[item.support]) return;
-          item.visible = false;
-          mesh.setMatrixAt(index, ZERO);
-          changed = true;
-        });
-        if (changed) mesh.instanceMatrix.needsUpdate = true;
-      }
+      sync();
     },
+    reset() { elapsed = 0; if (!disposed) sync(); },
     dispose() {
       disposed = true;
       for (const { mesh } of meshes) {

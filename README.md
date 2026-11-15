@@ -6,6 +6,8 @@ Um jogo de voo livre em uma cidade destrutível. Voe como um dragão oriental, a
 
 O jogo aceita teclado e mouse ou controle com analógicos. Os controles aparecem no menu inicial.
 
+Segure Shift ou o gatilho direito para impulsionar. Ao ultrapassar aproximadamente 343 m/s, o voo produz uma onda de choque e um estrondo. Para reconstruir a cidade, pause o jogo e selecione **Reconstruir cidade**.
+
 ## Executar localmente
 
 Instale o Node.js, depois execute:

@@ -79,6 +79,9 @@
   #sound{position:fixed;z-index:7;right:14px;top:14px;padding:9px 12px;border:1px solid rgba(255,221,188,.35);border-radius:8px;background:rgba(20,43,51,.9);color:#fff0d8;font:600 12px system-ui;cursor:pointer}
   #sound:hover{background:#30505a}
   #sound:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
+  #resetCity{margin-top:12px;padding:10px 18px;border:1px solid rgba(255,221,188,.4);border-radius:999px;background:rgba(20,43,51,.8);color:#fff0d8;font:600 12px system-ui;cursor:pointer}
+  #resetCity:hover{background:#30505a}
+  #resetCity:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
   @media (prefers-reduced-motion:reduce){#hud,#menu,#cross,#go{transition:none}}
 </style>
 </head>
@@ -104,6 +107,7 @@
   </div>
   <p>Controle: analógico esquerdo movimenta · gatilho direito impulsiona · Start pausa.</p>
   <button id="go">Carregando…</button>
+  <button id="resetCity" type="button">Reconstruir cidade</button>
   <div id="status"></div>
 </div>
 <div id="credit">Dragão oriental · voo livre</div>
