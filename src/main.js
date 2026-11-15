@@ -57,6 +57,26 @@ const composer = createVisualPipeline(renderer, scene, camera);
 const fx = new FX(scene, camera);
 const inkLeft = new InkTrail(scene, camera, -9);
 const inkRight = new InkTrail(scene, camera, 9);
+const paintColor = $('paintColor');
+const paintPresets = document.querySelectorAll('input[name="paintPreset"]');
+function choosePaint(color) {
+  inkLeft.setColor(color);
+  inkRight.setColor(color);
+  paintColor.value = color;
+}
+paintPresets.forEach((preset) => preset.addEventListener('change', () => {
+  if (preset.checked) choosePaint(preset.value);
+}));
+paintColor.addEventListener('input', () => {
+  paintPresets.forEach((preset) => { preset.checked = false; });
+  choosePaint(paintColor.value);
+});
+$('clearPaint').addEventListener('click', () => {
+  inkLeft.clear();
+  inkRight.clear();
+  $('status').textContent = 'Tinta removida.';
+});
+choosePaint(paintColor.value);
 const city = new City(scene, fx);
 const urban = createUrbanDetails(scene, city);
 const polyProps = createPolyProps(scene, city);

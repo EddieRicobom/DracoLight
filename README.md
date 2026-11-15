@@ -8,6 +8,8 @@ O jogo aceita teclado e mouse ou controle com analógicos. Os controles aparecem
 
 Segure Shift ou o gatilho direito para impulsionar. Ao ultrapassar aproximadamente 343 m/s, o voo produz uma onda de choque e um estrondo. Para reconstruir a cidade, pause o jogo e selecione **Reconstruir cidade**.
 
+Escolha a tinta no menu inicial ou no menu de pausa (Esc). As cores escolhidas afetam os novos rastros; use **Limpar tinta** para apagar as marcas. O jogo limita a quantidade de marcas e remove as mais antigas quando esse limite é atingido.
+
 ## Executar localmente
 
 Instale o Node.js, depois execute:

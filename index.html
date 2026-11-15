@@ -82,6 +82,21 @@
   #resetCity{margin-top:12px;padding:10px 18px;border:1px solid rgba(255,221,188,.4);border-radius:999px;background:rgba(20,43,51,.8);color:#fff0d8;font:600 12px system-ui;cursor:pointer}
   #resetCity:hover{background:#30505a}
   #resetCity:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
+  .paint{width:min(440px,100%);box-sizing:border-box;margin:0 0 16px;padding:12px 14px;border:1px solid rgba(255,221,188,.3);border-radius:12px;background:rgba(0,0,0,.2);text-align:left}
+  .paint legend{padding:0 6px;font-size:12px;font-weight:700;letter-spacing:.08em}
+  .paint p{margin:0 0 10px!important;font-size:12px!important;line-height:1.4!important}
+  .paint-options{display:flex;align-items:center;flex-wrap:wrap;gap:9px}
+  .paint-option{position:relative;display:inline-flex;cursor:pointer}
+  .paint-option input{position:absolute;width:1px;height:1px;opacity:0}
+  .paint-option span{display:block;width:34px;height:34px;box-sizing:border-box;border:2px solid rgba(255,255,255,.55);border-radius:50%;background:var(--paint-color)}
+  .paint-option input:checked + span{outline:3px solid #fff0d1;outline-offset:2px}
+  .paint-option input:focus-visible + span{box-shadow:0 0 0 5px #192e35,0 0 0 8px #fff0d1}
+  .paint-custom{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
+  #paintColor{width:38px;height:38px;padding:2px;border:1px solid rgba(255,221,188,.5);border-radius:7px;background:#203c44;cursor:pointer}
+  #clearPaint{min-height:38px;padding:8px 12px;border:1px solid rgba(255,221,188,.4);border-radius:8px;background:rgba(20,43,51,.9);color:#fff0d8;font:600 12px system-ui;cursor:pointer}
+  #clearPaint:hover{background:#30505a}
+  #paintColor:focus-visible,#clearPaint:focus-visible{outline:3px solid #fff0d1;outline-offset:3px}
+  @media (max-width:600px),(max-height:650px){.paint{margin-bottom:10px;padding:8px 10px}.paint p{margin-bottom:8px!important}.paint-options{gap:7px}}
   @media (prefers-reduced-motion:reduce){#hud,#menu,#cross,#go{transition:none}}
 </style>
 </head>
@@ -106,6 +121,21 @@
     <span><kbd>Esc</kbd></span><span>pausar</span>
   </div>
   <p>Controle: analógico esquerdo movimenta · gatilho direito impulsiona · Start pausa.</p>
+  <fieldset class="paint" id="paintControls">
+    <legend>Tinta</legend>
+    <p>Escolha uma cor. Durante o voo, pressione Esc para abrir a paleta.</p>
+    <div class="paint-options" role="radiogroup" aria-label="Cores de tinta">
+      <label class="paint-option" title="Vermelho"><input type="radio" name="paintPreset" value="#ef4444" aria-label="Vermelho" checked><span style="--paint-color:#ef4444"></span></label>
+      <label class="paint-option" title="Laranja"><input type="radio" name="paintPreset" value="#f97316" aria-label="Laranja"><span style="--paint-color:#f97316"></span></label>
+      <label class="paint-option" title="Amarelo"><input type="radio" name="paintPreset" value="#facc15" aria-label="Amarelo"><span style="--paint-color:#facc15"></span></label>
+      <label class="paint-option" title="Verde"><input type="radio" name="paintPreset" value="#22c55e" aria-label="Verde"><span style="--paint-color:#22c55e"></span></label>
+      <label class="paint-option" title="Azul"><input type="radio" name="paintPreset" value="#3b82f6" aria-label="Azul"><span style="--paint-color:#3b82f6"></span></label>
+      <label class="paint-option" title="Roxo"><input type="radio" name="paintPreset" value="#a855f7" aria-label="Roxo"><span style="--paint-color:#a855f7"></span></label>
+      <label class="paint-option" title="Branco"><input type="radio" name="paintPreset" value="#ffffff" aria-label="Branco"><span style="--paint-color:#ffffff"></span></label>
+      <label class="paint-custom" for="paintColor">Outra cor <input id="paintColor" type="color" value="#ef4444" aria-label="Escolher outra cor de tinta"></label>
+      <button id="clearPaint" type="button">Limpar tinta</button>
+    </div>
+  </fieldset>
   <button id="go">Carregando…</button>
   <button id="resetCity" type="button">Reconstruir cidade</button>
   <div id="status"></div>
