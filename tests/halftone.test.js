@@ -22,7 +22,8 @@ test('halftone wraps existing material effects and keeps instance-local coordina
   assert.match(shader.vertexShader, /vHalftonePosition = position \* halftoneScale/);
   assert.match(shader.vertexShader, /length\(instanceMatrix\[0\]\.xyz\)/);
   assert.equal(shader.uniforms.uHalftoneEnabled, halftoneUniform);
-  assert.match(material.customProgramCacheKey(), /surface-halftone-v3-00/);
+  assert.match(material.customProgramCacheKey(), /surface-halftone-v4-00/);
+  assert.match(shader.fragmentShader, /float illumination = luminance \/ \(luminance \+ 0\.35\)/);
   assert.notEqual(material.customProgramCacheKey(), originalKey);
 
   halftoneUniform.value = 1;
@@ -71,7 +72,7 @@ test('point sprites use their own sprite coordinates', () => {
   const shader = { uniforms: {}, vertexShader: material.vertexShader, fragmentShader: material.fragmentShader };
   material.onBeforeCompile(shader, {});
   assert.match(shader.fragmentShader, /gl_PointCoord/);
-  assert.match(material.customProgramCacheKey(), /surface-halftone-v3-10/);
+  assert.match(material.customProgramCacheKey(), /surface-halftone-v4-10/);
 });
 
 test('animated geometry uses stable UVs instead of rewritten world positions', () => {
@@ -90,5 +91,26 @@ test('animated geometry uses stable UVs instead of rewritten world positions', (
   assert.match(shader.vertexShader, /vHalftoneUv = uv/);
   assert.match(shader.fragmentShader, /surfaceCoord = vHalftoneUv \* vec2\(5\.0, 1\.0\)/);
   assert.doesNotMatch(shader.fragmentShader, /cross\(dFdx\(vHalftonePosition\)/);
-  assert.match(material.customProgramCacheKey(), /surface-halftone-v3-01/);
+  assert.match(material.customProgramCacheKey(), /surface-halftone-v4-01/);
+});
+
+test('city paint receives the same neutral halftone shading as other surfaces', () => {
+  const material = new THREE.MeshStandardMaterial();
+  material.userData.cityPaint = true;
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = `vec4 cityPaint;\n${shader.fragmentShader}`;
+  };
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
+  applyHalftone(mesh);
+  const shader = {
+    uniforms: {},
+    vertexShader: 'void main() { gl_Position = vec4(position, 1.0); }',
+    fragmentShader: 'void main() { cityPaint = vec4(0.9, 0.2, 0.1, 1.0); gl_FragColor = cityPaint; }',
+  };
+  material.onBeforeCompile(shader, {});
+  assert.match(shader.fragmentShader, /gl_FragColor\.rgb \*= 1\.0 - mark \* contrast \* visibility/);
+  assert.doesNotMatch(shader.fragmentShader, /unpainted|cityPaint\.a/);
+  assert.doesNotMatch(shader.fragmentShader, /gl_FragColor\.a\s*=/);
+  assert.match(shader.fragmentShader, /dot\(gl_FragColor\.rgb/);
+  assert.match(material.customProgramCacheKey(), /surface-halftone-v4-00/);
 });

@@ -1,14 +1,27 @@
 import * as THREE from 'three';
 import { rng } from './util.js';
 
+// Bake a neutral overhead fill into the equipment itself. The roof details
+// keep their volume when the character lights move across the city.
+function addFixedShading(geometry) {
+  const normals = geometry.getAttribute('normal');
+  const shades = new Float32Array(normals.count * 3);
+  for (let i = 0; i < normals.count; i++) {
+    const shade = THREE.MathUtils.clamp(0.72 + normals.getY(i) * 0.22 + normals.getX(i) * 0.06 + normals.getZ(i) * 0.04, 0.5, 1);
+    shades.fill(shade, i * 3, i * 3 + 3);
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(shades, 3));
+  return geometry;
+}
+
 // Decorative roof equipment. Each part is attached to one existing roof chunk;
 // it never enters the city's collision, damage, or collapse grid.
 export function createUrbanDetails(scene, city) {
   const random = rng(26791);
   const groups = [
-    { geometry: new THREE.BoxGeometry(1, 1, 1), color: 0xa9a9a2, parts: [] }, // HVAC cabinets
-    { geometry: new THREE.CylinderGeometry(1, 1, 1, 8), color: 0x676e70, parts: [] }, // vents and fans
-    { geometry: new THREE.CylinderGeometry(1, 1, 1, 6), color: 0xb3a99c, parts: [] }, // aerials
+    { geometry: addFixedShading(new THREE.BoxGeometry(1, 1, 1)), color: 0xa9a9a2, parts: [] }, // HVAC cabinets
+    { geometry: addFixedShading(new THREE.CylinderGeometry(1, 1, 1, 8)), color: 0x676e70, parts: [] }, // vents and fans
+    { geometry: addFixedShading(new THREE.CylinderGeometry(1, 1, 1, 6)), color: 0xb3a99c, parts: [] }, // aerials
   ];
   const matrix = new THREE.Matrix4();
   const color = new THREE.Color();
@@ -64,11 +77,11 @@ export function createUrbanDetails(scene, city) {
   const meshes = groups.map((group) => {
     const mesh = new THREE.InstancedMesh(
       group.geometry,
-      new THREE.MeshStandardMaterial({ color: group.color, roughness: 0.83, metalness: 0.32 }),
+      new THREE.MeshBasicMaterial({ color: group.color, vertexColors: true, fog: true }),
       group.parts.length,
     );
     mesh.castShadow = false;
-    mesh.receiveShadow = true;
+    mesh.receiveShadow = false;
     mesh.frustumCulled = false;
     group.parts.forEach((part, i) => {
       matrix.makeScale(part.sx, part.sy, part.sz).setPosition(part.x, part.y, part.z);

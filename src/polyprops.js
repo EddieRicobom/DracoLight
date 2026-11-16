@@ -7,6 +7,35 @@ import { rng } from './util.js';
 const MODELS = ['utility_box_01', 'utility_box_02'];
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 
+function fixedLightGeometry(source) {
+  const geometry = source.clone();
+  const normals = geometry.getAttribute('normal');
+  if (!normals) return geometry;
+  const original = geometry.getAttribute('color');
+  const colors = new Float32Array(normals.count * 3);
+  for (let i = 0; i < normals.count; i++) {
+    const shade = THREE.MathUtils.clamp(0.76 + normals.getY(i) * 0.18 + normals.getX(i) * 0.045 + normals.getZ(i) * 0.035, 0.55, 1);
+    for (let channel = 0; channel < 3; channel++) {
+      colors[i * 3 + channel] = shade * (original ? original.getComponent(i, channel) : 1);
+    }
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+function fixedLightMaterial(source) {
+  return new THREE.MeshBasicMaterial({
+    color: source.color,
+    map: source.map,
+    vertexColors: true,
+    transparent: source.transparent,
+    opacity: source.opacity,
+    alphaTest: source.alphaTest,
+    side: source.side,
+    fog: true,
+  });
+}
+
 function disposeAsset(root) {
   root.traverse((object) => {
     if (!object.isMesh) return;
@@ -53,10 +82,12 @@ export function createPolyProps(scene, city) {
     const source = gltf.scene.getObjectByProperty('isMesh', true);
     if (!source) { disposeAsset(gltf.scene); return; }
     const items = placements[kind];
-    const mesh = new THREE.InstancedMesh(source.geometry, source.material, items.length);
+    const geometry = fixedLightGeometry(source.geometry);
+    const material = fixedLightMaterial(source.material);
+    const mesh = new THREE.InstancedMesh(geometry, material, items.length);
     mesh.name = `Poly Haven ${id}`;
     mesh.castShadow = false;
-    mesh.receiveShadow = true;
+    mesh.receiveShadow = false;
     mesh.frustumCulled = false;
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
@@ -74,6 +105,17 @@ export function createPolyProps(scene, city) {
     mesh.instanceMatrix.needsUpdate = true;
     scene.add(mesh);
     meshes.push({ mesh, items });
+    // The instance owns the albedo texture; release the unused PBR maps.
+    gltf.scene.traverse((object) => {
+      if (!object.isMesh) return;
+      object.geometry.dispose();
+      for (const originalMaterial of [object.material].flat()) {
+        for (const value of Object.values(originalMaterial)) {
+          if (value?.isTexture && value !== material.map) value.dispose();
+        }
+        originalMaterial.dispose();
+      }
+    });
   })).then((results) => {
     for (const result of results) if (result.status === 'rejected') console.warn('Poly Haven roof prop failed to load:', result.reason);
     return meshes.length;

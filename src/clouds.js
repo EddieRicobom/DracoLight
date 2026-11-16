@@ -27,12 +27,19 @@ export function createClouds(scene, { count = 72, seed = DEFAULT_SEED, extent = 
   const puffsPerCloud = 5;
   const puffs = [];
   const geometry = new THREE.SphereGeometry(1, 8, 6);
-  const material = new THREE.MeshLambertMaterial({
-    color: 0xd9dde0,
+  const normals = geometry.getAttribute('normal');
+  const shades = new Float32Array(normals.count * 3);
+  for (let i = 0; i < normals.count; i++) {
+    const shade = THREE.MathUtils.clamp(0.76 + normals.getY(i) * 0.2 + normals.getX(i) * 0.04, 0.56, 1);
+    shades.fill(shade, i * 3, i * 3 + 3);
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(shades, 3));
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xc9cdd0,
+    vertexColors: true,
     transparent: true,
     opacity: 0.66,
     depthWrite: false,
-    flatShading: true,
     fog: true,
   });
   const mesh = new THREE.InstancedMesh(geometry, material, cloudCount * puffsPerCloud);

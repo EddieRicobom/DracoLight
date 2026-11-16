@@ -63,18 +63,21 @@ export function applyHalftone(root) {
             vec2 offset = fract(grid) - 0.5 - (randomPair - 0.5) * 0.10;
             offset *= vec2(mix(0.94, 1.06, randomPair.y),
                            mix(1.06, 0.94, randomPair.x));
-            float luminance = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-            float area = mix(0.29, 0.015, clamp(luminance, 0.0, 1.0));
+            // The material has already resolved its lighting. Compress HDR
+            // highlights so dot size changes smoothly across lit surfaces.
+            float luminance = max(dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722)), 0.0);
+            float illumination = luminance / (luminance + 0.35);
+            float area = mix(0.29, 0.015, illumination);
             area += (randomPair.x - 0.5) * 0.018;
             float distanceSquared = dot(offset, offset);
             float feather = max(fwidth(distanceSquared), 0.018);
             float mark = 1.0 - smoothstep(area - feather, area + feather, distanceSquared);
-            float contrast = 0.24 + 0.24 * smoothstep(0.08, 0.8, luminance);
+            float contrast = mix(0.26, 0.44, smoothstep(0.12, 0.8, illumination));
             gl_FragColor.rgb *= 1.0 - mark * contrast * visibility;
           }
         `;
       };
-      material.customProgramCacheKey = () => `${priorKey}|surface-halftone-v3-${Number(isPointSprite)}${Number(useUV)}`;
+      material.customProgramCacheKey = () => `${priorKey}|surface-halftone-v4-${Number(isPointSprite)}${Number(useUV)}`;
       material.needsUpdate = true;
     }
   });
