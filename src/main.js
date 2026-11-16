@@ -425,11 +425,11 @@ function updateCamera(dt) {
     sky.position.copy(camera.position); sky.updateAltitude?.(human.position.y, elapsed);
     return;
   }
-  const back = tmp.copy(player.fwd).multiplyScalar(-48 - clamp(speed / 90, 0, 12));
-  const elevated = target.copy(player.pos).add(back).addScaledVector(THREE.Object3D.DEFAULT_UP, 22);
+  const back = tmp.copy(player.fwd).multiplyScalar(-64 - clamp(speed / 110, 0, 10));
+  const elevated = target.copy(player.pos).add(back).addScaledVector(THREE.Object3D.DEFAULT_UP, 27);
   camera.position.lerp(elevated, damp(5.5, dt));
   if (fx.shake > 0.02) camera.position.add(tmp2.set((Math.random() - 0.5) * fx.shake, (Math.random() - 0.5) * fx.shake, 0));
-  camera.lookAt(tmp2.copy(player.pos).addScaledVector(player.fwd, 60));
+  camera.lookAt(tmp2.copy(player.pos).addScaledVector(player.fwd, 38));
   camera.fov += ((70 + clamp(speed / 55, 0, 14)) - camera.fov) * damp(2.5, dt);
   camera.updateProjectionMatrix();
   fx.setScale(innerHeight * renderer.getPixelRatio(), camera.fov);

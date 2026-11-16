@@ -54,9 +54,9 @@ export function applyHalftone(root) {
               surfaceCoord = face.x > face.y && face.x > face.z
                 ? vHalftonePosition.zy : face.y > face.z
                 ? vHalftonePosition.xz : vHalftonePosition.xy;`}
-            vec2 grid = surfaceCoord / 0.55;
+            vec2 grid = surfaceCoord / 1.15;
             float footprint = max(length(dFdx(grid)), length(dFdy(grid)));
-            float visibility = 1.0 - smoothstep(0.35, 0.95, footprint);
+            float visibility = 1.0 - smoothstep(0.45, 1.15, footprint);
             vec2 cell = floor(grid);
             vec2 randomPair = fract(vec2(dot(cell, vec2(0.06711, 0.00584)),
                                          dot(cell, vec2(0.03697, 0.05377))) * 52.9829189);

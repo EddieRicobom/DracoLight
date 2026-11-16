@@ -137,6 +137,48 @@
   .coop-panel input:focus-visible,.coop-panel button:focus-visible,#switchCharacter:focus-visible{outline:3px solid #fff0d1;outline-offset:2px}
   #coopStatus{font-size:12px;line-height:1.4;margin:8px 0 0;overflow-wrap:anywhere} #coopRooms:empty{display:none} #switchCharacter{margin:0 0 12px}
 
+
+  /* Paper, ink and halftone frame the city without obscuring the controls. */
+  #menu{
+    color:#f4f1e9;
+    background:radial-gradient(ellipse at 50% 30%,rgba(62,62,62,.94),rgba(16,17,18,.98) 78%);
+    isolation:isolate;
+  }
+  #menu::before{
+    content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background-image:radial-gradient(circle,rgba(255,255,255,.13) 1px,transparent 1.4px);
+    background-size:6px 6px;opacity:.48;
+    mask-image:linear-gradient(to bottom,black,transparent 72%);
+  }
+  #menu h1{color:#ed5048;text-shadow:3px 3px 0 #541d20,6px 6px 0 rgba(0,0,0,.35);letter-spacing:.12em}
+  #menu h2{color:#f4f1e9;font-weight:700;letter-spacing:.2em}
+  #menu h2::before,#menu h2::after{content:"―";color:#ed5048;margin:0 .7em}
+  #menu p{color:#e7e4dd;opacity:1}
+  .keys,.paint,.shading,.coop-panel{
+    border:1px solid #777773;border-radius:2px;
+    background:rgba(24,25,26,.94);box-shadow:4px 4px 0 rgba(0,0,0,.35);
+  }
+  .keys kbd{border-radius:2px;border-color:#898985;background:#343536;color:#fff;font-family:monospace}
+  .paint legend,.shading legend,.coop-panel h3{color:#f5f1e8;letter-spacing:.08em;text-transform:uppercase}
+  .paint legend,.shading legend{border-left:3px solid #ed5048;padding-left:8px}
+  #go{margin:0 0 20px;flex-shrink:0;border:2px solid #ffb1a7;border-radius:2px;background:#e84e46;color:#fff;box-shadow:5px 5px 0 #711e20}
+  #go:hover{filter:brightness(1.12)}
+  #resetCity,#clearPaint,#switchCharacter,.coop-panel input,.coop-panel button,.shading-option span,#sound{
+    border-radius:2px;border-color:#898985;background:#292a2b;color:#f7f4ed;
+  }
+  #resetCity:hover,#clearPaint:hover,#switchCharacter:hover,.coop-panel button:hover,#sound:hover{background:#454647}
+  .shading-option input:checked + span{border-color:#ffb1a7;background:#80312e;color:#fff}
+  #paintColor{border-radius:2px;background:#292a2b}
+  .bars,.ebars,#score{border-radius:2px;border-color:#888;background:rgba(25,26,27,.9);box-shadow:4px 4px 0 rgba(0,0,0,.38);backdrop-filter:none}
+  .bar{border-radius:0;border-color:#aaa;background:#111}
+  #stP i{background:linear-gradient(90deg,#b62d2e,#ff7362)}
+  #score b{color:#ff8b7f}
+  #warn{border-radius:2px}
+  @media (pointer:coarse){
+    .touch-stick,.touch-button{background:rgba(30,31,32,.78);border-color:rgba(255,255,255,.7)}
+    .touch-button:active,.touch-button.active{background:#e84e46;color:#fff}
+  }
+
 </style>
 </head>
 <body>
@@ -160,6 +202,7 @@
   <h1>赤龍</h1>
   <h2 id="sub">Draco Light · voo livre</h2>
   <p id="msg">Voe livremente pela cidade, atravesse prédios e suba até a estratosfera. Sem inimigos: escolha seu próprio caminho.</p>
+  <button id="go">Carregando…</button>
   <div class="keys">
     <span><kbd>Mouse</kbd> / <kbd>Analógico dir.</kbd></span><span>direção do voo</span>
     <span><kbd>W</kbd> <kbd>S</kbd></span><span>acelerar / frear</span>
@@ -214,7 +257,6 @@
     <div class="coop-row"><input id="coopCode" maxlength="12" placeholder="Código da sala" aria-label="Código da sala"><button id="coopJoin" type="button">Entrar</button><button id="coopLeave" type="button" hidden>Sair da sala</button></div>
     <div id="coopRooms"></div><p id="coopStatus" role="status">O anfitrião controla o dragão; convidados controlam o personagem.</p>
   </section>
-  <button id="go">Carregando…</button>
   <button id="resetCity" type="button">Reconstruir cidade</button>
   <div id="status"></div>
 </div>

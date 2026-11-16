@@ -85,6 +85,7 @@ export function createSky(scene) {
         gl_FragColor = vec4(color, 1.0);
       }`,
   }));
+  sky.material.userData.skyAtmosphere = true;
   sky.frustumCulled = false;
   sky.renderOrder = -1000;
   scene.add(sky);

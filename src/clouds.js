@@ -26,19 +26,19 @@ export function createClouds(scene, { count = 72, seed = DEFAULT_SEED, extent = 
   const cloudCount = Math.max(0, Math.floor(count));
   const puffsPerCloud = 5;
   const puffs = [];
-  const geometry = new THREE.SphereGeometry(1, 8, 6);
+  const geometry = new THREE.SphereGeometry(1, 12, 8);
   const normals = geometry.getAttribute('normal');
   const shades = new Float32Array(normals.count * 3);
   for (let i = 0; i < normals.count; i++) {
-    const shade = THREE.MathUtils.clamp(0.76 + normals.getY(i) * 0.2 + normals.getX(i) * 0.04, 0.56, 1);
+    const shade = THREE.MathUtils.clamp(0.88 + normals.getY(i) * 0.10 + normals.getX(i) * 0.02, 0.76, 1);
     shades.fill(shade, i * 3, i * 3 + 3);
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(shades, 3));
   const material = new THREE.MeshBasicMaterial({
-    color: 0xc9cdd0,
+    color: 0xf3f3f3,
     vertexColors: true,
     transparent: true,
-    opacity: 0.66,
+    opacity: 0.92,
     depthWrite: false,
     fog: true,
   });
@@ -57,13 +57,15 @@ export function createClouds(scene, { count = 72, seed = DEFAULT_SEED, extent = 
     const y = [460, 1050, 1950][layer] + (random() - 0.5) * [150, 300, 500][layer];
     const width = 48 + random() * 58;
     for (let j = 0; j < puffsPerCloud; j++) {
-      const angle = j * Math.PI * 2 / puffsPerCloud + random() * 0.45;
-      const spread = j === 0 ? 0 : 0.38 + random() * 0.48;
-      const size = width * (j === 0 ? 0.86 : 0.55 + random() * 0.27);
+      // A tall center and overlapping, unequal lobes produce a cumulus
+      // silhouette from the ground and from the player's flight height.
+      const size = width * (j === 0 ? 0.72 : 0.42 + random() * 0.18);
+      const angle = (j - 1) * Math.PI * 0.5 + random() * 0.35;
+      const spread = j === 0 ? 0 : 0.58 + random() * 0.18;
       const puff = {
         anchor: new THREE.Vector3(
           x + Math.cos(angle) * width * spread,
-          y + (random() - 0.5) * 30,
+          y + (j === 0 ? width * 0.14 : (random() - 0.5) * width * 0.25),
           z + Math.sin(angle) * width * spread,
         ),
         size,
@@ -71,7 +73,7 @@ export function createClouds(scene, { count = 72, seed = DEFAULT_SEED, extent = 
         distortion: 0,
       };
       puffs.push(puff);
-      SCALE.set(size, size * 0.60, size * 0.82);
+      SCALE.set(size, size * 0.82, size * 0.92);
       MATRIX.compose(puff.anchor, QUATERNION, SCALE);
       mesh.setMatrixAt(puffs.length - 1, MATRIX);
     }
@@ -132,8 +134,8 @@ export function createClouds(scene, { count = 72, seed = DEFAULT_SEED, extent = 
       const deformation = puff.distortion;
       SCALE.set(
         puff.size * (1 + 0.14 * deformation),
-        puff.size * 0.60 * (1 - 0.18 * deformation),
-        puff.size * 0.82 * (1 + 0.14 * deformation),
+        puff.size * 0.82 * (1 - 0.18 * deformation),
+        puff.size * 0.92 * (1 + 0.14 * deformation),
       );
       UNIT.copy(anchor).add(puff.offset);
       MATRIX.compose(UNIT, QUATERNION, SCALE);

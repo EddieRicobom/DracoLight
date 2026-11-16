@@ -11,19 +11,20 @@ export function makeMonochrome(root) {
       // The default Three.js key reads onBeforeCompile dynamically. Capture it
       // before wrapping or different city shaders can share the same program.
       const priorKey = material.customProgramCacheKey();
-      const variantKey = `${Number(!!material.userData.cityGround)}${Number(!!material.userData.cityPaint)}${Number(!!material.userData.cityPaving)}`;
+      const variantKey = `${Number(!!material.userData.cityGround)}${Number(!!material.userData.cityPaint)}${Number(!!material.userData.cityPaving)}${Number(!!material.userData.skyAtmosphere)}`;
       material.onBeforeCompile = function(shader, renderer) {
         previous.call(this, shader, renderer);
         shader.fragmentShader = shader.fragmentShader.replace(/void\s+main\s*\(\s*\)/, 'void monochromeOriginalMain()');
         const ground = material.userData.cityGround
-          ? 'tone = mix(0.84, 0.98, tone);'
+          ? 'tone = mix(0.76, 0.98, tone);'
           : '';
+        const atmosphere = material.userData.skyAtmosphere ? 'tone *= 0.76;' : '';
         const painted = material.userData.cityPaint
           ? 'vec3 ink = pow(max(cityPaint.rgb, vec3(0.0)), vec3(1.0 / 2.2)); gl_FragColor.rgb = mix(vec3(tone), ink * max(tone, 0.72), cityPaint.a);'
           : 'gl_FragColor.rgb = vec3(tone);';
-        shader.fragmentShader += `\nvoid main() { monochromeOriginalMain(); float grey = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722)); float tone = clamp(pow(max(grey, 0.0), 0.72), 0.06, 0.98); ${ground} ${painted} }\n`;
+        shader.fragmentShader += `\nvoid main() { monochromeOriginalMain(); float grey = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722)); float tone = clamp(pow(max(grey, 0.0), 0.90), 0.04, 0.98); ${ground} ${atmosphere} ${painted} }\n`;
       };
-      material.customProgramCacheKey = () => `${priorKey}|world-grey-v2-${variantKey}`;
+      material.customProgramCacheKey = () => `${priorKey}|world-grey-v3-${variantKey}`;
       material.needsUpdate = true;
     }
   });

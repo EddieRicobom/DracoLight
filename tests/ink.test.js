@@ -38,10 +38,31 @@ test('teleporting the trail does not paint the space between positions', () => {
   trail.onPaint = (position, radius) => { if (radius > 2) contacts.push(position.clone()); };
   const direction = new THREE.Vector3(0, 0, -1);
   trail.update(0.1, new THREE.Vector3(0, 10, 0), direction, 100, false);
+  trail.update(0.1, new THREE.Vector3(20, 10, 0), direction, 100, false);
   contacts.length = 0;
   trail.update(0.1, new THREE.Vector3(500, 10, 0), direction, 100, false);
   assert.ok(contacts.length > 0);
   assert.ok(contacts.every(position => position.x > 450));
+  trail.update(0.1, new THREE.Vector3(520, 10, 0), direction, 100, false);
+  const geometry = trail.mesh.geometry;
+  assert.equal(geometry.drawRange.count, 12);
+  assert.deepEqual([...geometry.index.array.slice(0, 12)], [0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7]);
+});
+
+test('the pattern stays attached to surviving ribbon points as older ones expire', () => {
+  const trail = new InkTrail(new THREE.Scene(), new THREE.PerspectiveCamera());
+  const direction = new THREE.Vector3(0, 0, -1);
+  trail.update(.1, new THREE.Vector3(0, 20, 0), direction, 100, false);
+  trail.update(1, new THREE.Vector3(15, 20, 0), direction, 100, false);
+  trail.update(1, new THREE.Vector3(45, 20, 0), direction, 100, false);
+  const uv = trail.mesh.geometry.getAttribute('uv');
+  const secondPoint = uv.getY(2);
+  const thirdPoint = uv.getY(4);
+  assert.ok(secondPoint > uv.getY(0));
+  assert.ok(Math.abs(thirdPoint - 3 * secondPoint) < .0001);
+  trail.update(13.1, new THREE.Vector3(), direction, 100, false, false);
+  assert.equal(uv.getY(0), secondPoint);
+  assert.equal(uv.getY(2), thirdPoint);
 });
 
 test('settled splashes stop repainting the same position', () => {

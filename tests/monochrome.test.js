@@ -21,10 +21,10 @@ test('world surfaces retain continuous greys after their original shader', () =>
   const source = compiledFragment(material);
   assert.equal(previousRan, true);
   assert.match(source, /void monochromeOriginalMain\(\) \{ gl_FragColor = vec4\(0\.4/);
-  assert.match(source, /float tone = clamp\(pow\(max\(grey, 0\.0\), 0\.72\)/);
+  assert.match(source, /float tone = clamp\(pow\(max\(grey, 0\.0\), 0\.90\)/);
   assert.match(source, /gl_FragColor\.rgb = vec3\(tone\)/);
   assert.doesNotMatch(source, /step\(0\.32, grey\)/);
-  assert.match(material.customProgramCacheKey(), /world-grey-v2-000/);
+  assert.match(material.customProgramCacheKey(), /world-grey-v3-0000/);
   const firstHook = material.onBeforeCompile;
   makeMonochrome(mesh);
   assert.equal(material.onBeforeCompile, firstHook);
@@ -35,7 +35,7 @@ test('paintable surfaces keep colored ink over a grey base', () => {
   material.userData.cityPaint = true;
   makeMonochrome(new THREE.Mesh(new THREE.BoxGeometry(), material));
   const source = compiledFragment(material);
-  assert.match(source, /float tone = clamp\(pow\(max\(grey, 0\.0\), 0\.72\)/);
+  assert.match(source, /float tone = clamp\(pow\(max\(grey, 0\.0\), 0\.90\)/);
   assert.match(source, /vec3 ink = pow\(max\(cityPaint\.rgb, vec3\(0\.0\)\)/);
   assert.match(source, /mix\(vec3\(tone\), ink \* max\(tone, 0\.72\), cityPaint\.a\)/);
 });
@@ -46,7 +46,7 @@ test('marked ground surfaces stay white while retaining subtle shading', () => {
   material.userData.cityPaint = true;
   makeMonochrome(new THREE.Mesh(new THREE.PlaneGeometry(), material));
   const source = compiledFragment(material);
-  assert.match(source, /tone = mix\(0\.84, 0\.98, tone\)/);
+  assert.match(source, /tone = mix\(0\.76, 0\.98, tone\)/);
   assert.match(source, /mix\(vec3\(tone\), ink \* max\(tone, 0\.72\), cityPaint\.a\)/);
 });
 
@@ -70,5 +70,5 @@ test('different original shaders and ground variants use different program keys'
   assert.notEqual(building.customProgramCacheKey(), paving.customProgramCacheKey());
   assert.notEqual(road.customProgramCacheKey(), paving.customProgramCacheKey());
   assert.match(compiledFragment(paving), /\/\/ paving/);
-  assert.match(compiledFragment(paving), /tone = mix\(0\.84, 0\.98, tone\)/);
+  assert.match(compiledFragment(paving), /tone = mix\(0\.76, 0\.98, tone\)/);
 });
