@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { rng, clamp, smooth, U, GLSL_COMMON } from './util.js';
 import { streamingDistrictIndex } from './district-streaming.js';
 import { districtArchitecture, landmarkAt, buildingArchitecture, forEachBuildingCell, landmarkProxyBoxes } from './city-architecture.js';
+import { ENGRAVING_SURFACE_GLSL, ENGRAVING_BUILDING_GLSL, ENGRAVING_PAVING_GLSL, engravingRoadGLSL } from './engraving.js';
 
 // ---------------------------------------------------------------------------------------------
 // The city is a voxel grid of 5 m chunks. Hollow buildings are drawn in spatial batches
@@ -40,6 +41,7 @@ const concrete = surfaceMaps('rough_concrete');
 function buildingMaterial() {
   const m = new THREE.MeshBasicMaterial({ color: 0xffffff });
   m.userData.cityPaint = true;
+  m.userData.cityEngraving = true;
   m.onBeforeCompile = (s) => {
     s.uniforms.uTime = U.uTime;
     s.uniforms.uSurfaceColor = { value: concrete.diff };
@@ -60,7 +62,9 @@ function buildingMaterial() {
         uniform sampler2D uSurfaceColor;
         varying vec3 vWP; varying vec3 vWN; varying vec2 vInfo; varying float vBurn; varying vec4 vPaint; varying vec3 vSun;
         vec4 cityPaint;
-        ${GLSL_COMMON}`)
+        ${GLSL_COMMON}
+        ${ENGRAVING_SURFACE_GLSL}
+        ${ENGRAVING_BUILDING_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         cityPaint = vPaint;
         {
@@ -81,34 +85,48 @@ function buildingMaterial() {
           float win = wx * wy * (1. - roof) * (1. - bot);
           float h = hash12(id + seed * 37.1 + N.xz * 13.7);
           float lit = step(shop ? 0.25 : 0.6, h) * win;
-          // World-space pattern stays aligned when individual facade chunks are removed.
-          float grime = 0.83 + 0.19 * vnoise(fc * vec2(0.31, 0.11) + seed * 9.)
-            + 0.06 * vnoise(fc * vec2(1.7, 0.27) + seed * 23.);
-          grime -= 0.11 * (1. - smoothstep(0., 12., vWP.y));
-          vec3 base = diffuseColor.rgb * grime;
-          vec3 concreteColor = texture2D(uSurfaceColor, fc / 4.0).rgb;
-          float concreteGrain = dot(concreteColor, vec3(.2126, .7152, .0722));
-          base *= mix(1.0, .55 + concreteGrain, mix(.65, .9, office));
-          float joint = 1. - smoothstep(.012, .025, min(f.x, 1. - f.x));
-          joint = max(joint, 1. - smoothstep(.012, .025, min(f.y, 1. - f.y)));
-          float brickCourse = 1. - smoothstep(.015, .045, fract(fc.y / .38));
-          float brickBond = 1. - smoothstep(.012, .035, fract(fc.x / .82 + mod(floor(fc.y / .38), 2.) * .5));
-          base *= 1. - brick * (0.2 * brickCourse + 0.12 * brickBond);
-          base *= 1. - office * joint * .17;
-          float reflected = .55 + .35 * vnoise(fc * vec2(.09, .22) + seed * 17.)
-            + .13 * hash12(id + seed * 4.);
-          vec3 glass = mix(vec3(.035, .052, .073), vec3(.12, .19, .25), glassT) * reflected;
-          glass += vec3(.055, .075, .09) * pow(1. - abs(dot(N, normalize(vWP - vec3(0., 120., 0.)))), 2.);
-          base = mix(base, glass, win);
           // Narrow dark mullions and horizontal floor bands define the window scale.
           float mullion = win * (1. - smoothstep(.018, .045, abs(fract(f.x * 2.) - .5)));
           float sill = (1. - roof) * (1. - bot) * (1. - smoothstep(.015, .055, abs(f.y - hi.y)));
           float frame = max(mullion, sill * .8);
-          base = mix(base, glassT > .5 ? vec3(.085, .1, .115) : vec3(.18, .19, .2), frame * .82);
-          float roofGrain = .75 + .35 * vnoise(vWP.xz * .28);
-          float roofSeam = 1. - smoothstep(.012, .045, fract(vWP.x / 5.));
-          vec3 roofC = vec3(.19, .195, .2) * roofGrain * (1. - .12 * roofSeam);
-          base = mix(base, roofC, roof);
+          vec3 footprint = fwidth(vWP);
+          vec2 markCoord = roof + bot > 0.5 ? vWP.xz : fc;
+          vec2 markWidth = roof + bot > 0.5 ? footprint.xz : abs(N.x) > 0.5 ? footprint.zy : footprint.xy;
+          float engraving = engravingDistrict(vWP.xz);
+          if (engraving > 0.0) engravingSample(engraving, markCoord, markWidth, 0.27);
+          vec2 textureUV = fc / 4.0;
+          vec2 textureDx = dFdx(textureUV), textureDy = dFdy(textureUV);
+          vec3 base = vec3(0.0);
+          if (cityEngravingCoverage < 1.0) {
+            // World-space pattern stays aligned when individual facade chunks are removed.
+            float grime = 0.83 + 0.19 * vnoise(fc * vec2(0.31, 0.11) + seed * 9.)
+              + 0.06 * vnoise(fc * vec2(1.7, 0.27) + seed * 23.);
+            grime -= 0.11 * (1. - smoothstep(0., 12., vWP.y));
+            base = diffuseColor.rgb * grime;
+            vec3 concreteColor = textureGrad(uSurfaceColor, textureUV, textureDx, textureDy).rgb;
+            float concreteGrain = dot(concreteColor, vec3(.2126, .7152, .0722));
+            base *= mix(1.0, .55 + concreteGrain, mix(.65, .9, office));
+            float joint = 1. - smoothstep(.012, .025, min(f.x, 1. - f.x));
+            joint = max(joint, 1. - smoothstep(.012, .025, min(f.y, 1. - f.y)));
+            float brickCourse = 1. - smoothstep(.015, .045, fract(fc.y / .38));
+            float brickBond = 1. - smoothstep(.012, .035, fract(fc.x / .82 + mod(floor(fc.y / .38), 2.) * .5));
+            base *= 1. - brick * (0.2 * brickCourse + 0.12 * brickBond);
+            base *= 1. - office * joint * .17;
+            float reflected = .55 + .35 * vnoise(fc * vec2(.09, .22) + seed * 17.)
+              + .13 * hash12(id + seed * 4.);
+            vec3 glass = mix(vec3(.035, .052, .073), vec3(.12, .19, .25), glassT) * reflected;
+            glass += vec3(.055, .075, .09) * pow(1. - abs(dot(N, normalize(vWP - vec3(0., 120., 0.)))), 2.);
+            base = mix(base, glass, win);
+            base = mix(base, glassT > .5 ? vec3(.085, .1, .115) : vec3(.18, .19, .2), frame * .82);
+            float roofGrain = .75 + .35 * vnoise(vWP.xz * .28);
+            float roofSeam = 1. - smoothstep(.012, .045, fract(vWP.x / 5.));
+            vec3 roofC = vec3(.19, .195, .2) * roofGrain * (1. - .12 * roofSeam);
+            base = mix(base, roofC, roof);
+          }
+          if (cityEngravingCoverage > 0.0) {
+            float tone = engravingBuilding(vWP, N, fc, markWidth, f, st, win, frame, seed);
+            base = mix(base, vec3(tone), cityEngravingCoverage);
+          }
           float burn = vBurn;
           base *= 1. - 0.88 * smoothstep(0., 1., burn) * (0.75 + 0.25 * vnoise(vWP.xy * 0.9 + vWP.zz));
           // Static solar occlusion feeds the halftone pass; the three channels
@@ -118,7 +136,7 @@ function buildingMaterial() {
           diffuseColor.rgb = base * mix(0.68, 1.0, clamp(sunVisibility, 0.0, 1.0));
           float hh = hash12(floor(vWP.xy * 0.3) + floor(vWP.zz * 0.3));
           vec3 warm = mix(vec3(1.0, 0.62, 0.32), vec3(0.75, 0.86, 1.0), step(0.82, hh));
-          diffuseColor.rgb += lit * (1. - step(0.25, burn)) * warm * (shop ? 1.5 : 0.8);
+          diffuseColor.rgb += lit * (1. - step(0.25, burn)) * mix(warm * (shop ? 1.5 : 0.8), vec3(0.13), cityEngravingCoverage);
           float ember = smoothstep(0.35, 1.0, burn);
           float fl = 0.55 + 0.45 * sin(uTime * 6.0 + vWP.y * 1.7 + vWP.x * 0.9) * vnoise(vWP.xy * 0.7 + uTime);
           diffuseColor.rgb += vec3(1.0, 0.32, 0.05) * ember * fl * 1.2 * vnoise(vWP.xz * 0.8 + vWP.yy * 0.5);
@@ -159,6 +177,8 @@ function scorchPatch(m, paving = false, maps = asphalt) {
   m.userData.cityPaint = true;
   m.userData.cityGround = true;
   m.userData.cityPaving = paving;
+  m.userData.cityEngraving = true;
+  m.customProgramCacheKey = () => `city-ground-surface-${paving ? 'paving' : 'road'}`;
   m.onBeforeCompile = (s) => {
     s.uniforms.uScorch = { value: scorch.tex };
     s.uniforms.uCityPaint = { value: paint.tex };
@@ -171,23 +191,36 @@ function scorchPatch(m, paving = false, maps = asphalt) {
             w = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
           #endif
           vSW = w.xz; }`);
-    s.fragmentShader = s.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D uScorch; uniform sampler2D uCityPaint; uniform sampler2D uCitySun; uniform sampler2D uSurfaceColor; varying vec2 vSW; vec4 cityPaint;\n${GLSL_COMMON}`)
+    s.fragmentShader = s.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D uScorch; uniform sampler2D uCityPaint; uniform sampler2D uCitySun; uniform sampler2D uSurfaceColor; varying vec2 vSW; vec4 cityPaint;\n${GLSL_COMMON}
+        ${ENGRAVING_SURFACE_GLSL}
+        ${paving ? ENGRAVING_PAVING_GLSL : engravingRoadGLSL(PITCH, ROAD)}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         { vec2 su = (vSW + ${HALF.toFixed(1)}) / ${(2 * HALF).toFixed(1)};
           cityPaint = (su.x >= 0. && su.x <= 1. && su.y >= 0. && su.y <= 1.) ? texture2D(uCityPaint, vec2(su.x, 1. - su.y)) : vec4(0.);
           float sc = (su.x > 0. && su.x < 1. && su.y > 0. && su.y < 1.) ? texture2D(uScorch, vec2(su.x, 1. - su.y)).r : 0.;
-          float grain = .91 + .13 * vnoise(vSW * 1.2) + .06 * vnoise(vSW * 4.);
-          ${paving ? `vec2 tile = fract(vSW / 2.5);
-          float mortar = 1. - smoothstep(.025, .07, min(min(tile.x, tile.y), min(1. - tile.x, 1. - tile.y)));
-          grain *= 1. - .15 * mortar;
-          grain *= .94 + .12 * hash12(floor(vSW / 2.5));` : ''}
-          vec2 surfaceUV = vSW / ${paving ? '4.0' : '12.0'};
-          vec3 surfaceColor = texture2D(uSurfaceColor, surfaceUV).rgb;
-          float amount = ${paving ? '.55' : 'clamp((.52 - dot(diffuseColor.rgb, vec3(.333))) * 3.0, .12, .8)'};
-          diffuseColor.rgb *= mix(vec3(1.0), surfaceColor * ${paving ? '1.6' : '2.0'}, amount);
+          vec2 footprint = fwidth(vSW);
+          float engraving = engravingDistrict(vSW);
+          if (engraving > 0.0) engravingSample(engraving, vSW, footprint, 0.34);
+          vec2 textureUV = vSW / ${paving ? '4.0' : '12.0'};
+          vec2 textureDx = dFdx(textureUV), textureDy = dFdy(textureUV);
+          vec3 base = vec3(0.0);
+          if (cityEngravingCoverage < 1.0) {
+            float grain = .91 + .13 * vnoise(vSW * 1.2) + .06 * vnoise(vSW * 4.);
+            ${paving ? `vec2 tile = fract(vSW / 2.5);
+            float mortar = 1. - smoothstep(.025, .07, min(min(tile.x, tile.y), min(1. - tile.x, 1. - tile.y)));
+            grain *= 1. - .15 * mortar;
+            grain *= .94 + .12 * hash12(floor(vSW / 2.5));` : ''}
+            vec3 surfaceColor = textureGrad(uSurfaceColor, textureUV, textureDx, textureDy).rgb;
+            float amount = ${paving ? '.55' : 'clamp((.52 - dot(diffuseColor.rgb, vec3(.333))) * 3.0, .12, .8)'};
+            base = diffuseColor.rgb * mix(vec3(1.0), surfaceColor * ${paving ? '1.6' : '2.0'}, amount) * grain;
+          }
+          if (cityEngravingCoverage > 0.0) {
+            float tone = ${paving ? 'engravingPaving(vSW, footprint, dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)))' : 'engravingRoad(vSW, footprint)'};
+            base = mix(base, vec3(tone), cityEngravingCoverage);
+          }
           float bakedGroundSun = (su.x >= 0. && su.x <= 1. && su.y >= 0. && su.y <= 1.)
             ? texture2D(uCitySun, vec2(su.x, 1. - su.y)).r : 1.;
-          diffuseColor.rgb *= (1. - 0.85 * sc) * grain * bakedGroundSun; }`);
+          diffuseColor.rgb = base * (1. - 0.85 * sc) * bakedGroundSun; }`);
   };
   return m;
 }

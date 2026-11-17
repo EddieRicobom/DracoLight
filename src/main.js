@@ -7,6 +7,7 @@ import { City, CH, HALF } from './city.js';
 import { createCityRelics } from './relics.js';
 import { createFlightCircuit } from './flight-circuit.js';
 import { createUrbanDetails } from './urban.js';
+import { createPedestrians } from './pedestrians.js';
 import { createPolyProps } from './polyprops.js';
 import { FX } from './fx.js';
 import { InkTrail } from './ink.js';
@@ -22,6 +23,7 @@ import { clamp, damp, turnToward, U } from './util.js';
 import { createSky, createVisualPipeline } from './visual.js';
 import { createClouds } from './clouds.js';
 import { applyHalftone, halftoneUniform } from './halftone.js';
+import { createPlayerCamera } from './player-camera.js';
 
 const $ = (id) => document.getElementById(id);
 let recordWorld = () => {};
@@ -79,6 +81,14 @@ const sky = createSky(scene);
 makeMonochrome(sky);
 sky.scale.setScalar(25);
 const composer = createVisualPipeline(renderer, scene, camera);
+const dioramaCameraControl = $('dioramaCamera');
+const dioramaCameraKey = 'dracoLight.dioramaCamera';
+try { dioramaCameraControl.checked = localStorage.getItem(dioramaCameraKey) === 'on'; }
+catch { /* The control still works for the current session. */ }
+dioramaCameraControl.addEventListener('change', () => {
+  try { localStorage.setItem(dioramaCameraKey, dioramaCameraControl.checked ? 'on' : 'off'); }
+  catch { /* The control still works for the current session. */ }
+});
 const clouds = createClouds(scene);
 makeMonochrome(clouds.mesh);
 
@@ -115,6 +125,7 @@ $('clearPaint').addEventListener('click', () => {
 choosePaint(paintColor.value);
 const beforeCity = new Set(scene.children);
 const city = new City(scene, fx);
+const pedestrians = createPedestrians(scene, city.blocks);
 const paintWorld = (position, radius, color) => {
   const changed = city.paintSphere(position, radius, color);
   if (changed > 0)
@@ -228,9 +239,9 @@ function currentGamepad() {
   return pads[activeGamepad];
 }
 function buttonDown(pad, index) { return !!pad?.buttons[index]?.pressed; }
-const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
+const tmp = new THREE.Vector3();
 const desired = new THREE.Vector3(), side = new THREE.Vector3();
-const target = new THREE.Vector3(), old = new THREE.Vector3(), motion = new THREE.Vector3();
+const old = new THREE.Vector3(), motion = new THREE.Vector3();
 const impact = new THREE.Vector3();
 const ray = {};
 const readouts = document.createElement('span');
@@ -428,34 +439,23 @@ function updateHuman(dt, pad) {
   meteor.update(dt, null, null, 0);
 }
 const humanForward = new THREE.Vector3();
+const followPlayer = createPlayerCamera(camera, {
+  cruiseSpeed: FLIGHT.cruise, accelerateSpeed: FLIGHT.accelerate,
+  raycast: (origin, direction, distance) => city.raycast(origin, direction, distance),
+});
 function activePosition() { return playerMode === 'dragon' ? player.pos : human.position; }
 function updateCamera(dt) {
-  if (playerMode === 'human') {
-    const direction = humanForward.set(Math.sin(yaw), 0, Math.cos(yaw));
-    const focus = target.copy(human.position).addScaledVector(THREE.Object3D.DEFAULT_UP, 2.5);
-    const destination = tmp.copy(focus).addScaledVector(direction, -12).addScaledVector(THREE.Object3D.DEFAULT_UP, 5 - pitch * 5);
-    camera.position.lerp(destination, damp(7, dt));
-    camera.lookAt(tmp2.copy(focus).addScaledVector(direction, 5));
-    camera.fov += (70 - camera.fov) * damp(2.5, dt); camera.updateProjectionMatrix();
-    fx.setScale(innerHeight * renderer.getPixelRatio(), camera.fov);
-    sun.position.set(human.position.x - 180, human.position.y + 260, human.position.z + 130);
-    sun.target.position.copy(human.position); sun.target.updateMatrixWorld();
-    sky.position.copy(camera.position); sky.updateAltitude?.(human.position.y, elapsed);
-    return;
-  }
-  const back = tmp.copy(player.fwd).multiplyScalar(-64 - clamp(speed / 110, 0, 10));
-  const elevated = target.copy(player.pos).add(back).addScaledVector(THREE.Object3D.DEFAULT_UP, 27);
-  camera.position.lerp(elevated, damp(5.5, dt));
-  if (fx.shake > 0.02) camera.position.add(tmp2.set((Math.random() - 0.5) * fx.shake, (Math.random() - 0.5) * fx.shake, 0));
-  camera.lookAt(tmp2.copy(player.pos).addScaledVector(player.fwd, 38));
-  camera.fov += ((70 + clamp(speed / 55, 0, 14)) - camera.fov) * damp(2.5, dt);
-  camera.updateProjectionMatrix();
+  const position = activePosition();
+  followPlayer(dt, {
+    walking: playerMode === 'human', position, forward: player.fwd, yaw, pitch, speed, actualSpeed,
+    boosting: player.boosting, shake: fx.shake, diorama: dioramaCameraControl.checked,
+  });
   fx.setScale(innerHeight * renderer.getPixelRatio(), camera.fov);
-  sun.position.set(player.pos.x - 180, player.pos.y + 260, player.pos.z + 130);
-  sun.target.position.copy(player.pos);
+  sun.position.set(position.x - 180, position.y + 260, position.z + 130);
+  sun.target.position.copy(position);
   sun.target.updateMatrixWorld();
   sky.position.copy(camera.position);
-  sky.updateAltitude?.(player.pos.y, elapsed);
+  sky.updateAltitude?.(position.y, elapsed);
 }
 
 function updateHud(dt) {
@@ -735,6 +735,7 @@ function frame(now) {
     polyProps.update(dt);
     fx.update(dt, city);
     updateCamera(dt);
+    pedestrians.update(dt, camera, cloudDragonPosition);
     updateHud(dt);
   } else if (state === 'menu') {
     camera.position.set(0, 150, 205);
