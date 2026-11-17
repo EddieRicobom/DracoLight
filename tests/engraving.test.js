@@ -37,7 +37,7 @@ test('pilot street, paving and facade shades compose with the original paint and
     material.onBeforeCompile(shader, {});
     const source = shader.fragmentShader;
     assert.ok(source.includes(variants[i]));
-    assert.match(source, /cityPaint = (\(su\.x|vPaint)/);
+    assert.match(source, /cityPaint = (texture2D\(uCityPaint, groundUv\)|vPaint)/);
     assert.match(source, /monochromeOriginalMain\(\);.*?float orderedTone.*?cityPaint\.a/s);
     assert.match(source, /halftonePreviousMain\(\);.*?visibility \* \(1\.0 - cityEngravingCoverage \* 0\.85\)/s);
     assert.doesNotMatch(source, /gl_FragCoord/);

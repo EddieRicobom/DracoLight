@@ -15,6 +15,8 @@ const BATCHES_PER_SIDE = 2;
 const DISTRICT_COUNT = NB / DISTRICT_BLOCKS, DISTRICT_WIDTH = DISTRICT_BLOCKS * PITCH;
 const BATCH_WIDTH = DISTRICT_WIDTH / BATCHES_PER_SIDE;
 export const HALF = (NB * PITCH) / 2;            // 2700
+const ROAD_EDGE = HALF + ROAD / 2;
+const PAPER_EDGE = ROAD_EDGE + 420;
 const OX = -HALF, OZ = -HALF;
 const GX = (NB * PITCH) / CH, GZ = GX, GY = 64; // 1080 x 64 x 1080
 const MAX_DEBRIS = 3600;
@@ -169,15 +171,32 @@ function queueAttributeUpdate(attribute, start, count) {
   attribute.needsUpdate = true;
 }
 
-// scorch decals painted on the ground in a 1024² canvas covering the whole city
+// Ground maps cover the streets and the printed margin beyond the last road.
 const scorch = { canvas: null, ctx: null, tex: null, dirty: false, t: 0 };
 const paint = { canvas: null, ctx: null, tex: null, dirty: false, t: 0.15 };
 const groundSun = { canvas: null, tex: null };
+const PAPER_MARGIN_GLSL = /* glsl */`
+float scenePaperCoverage = 0.0;
+
+float paperMargin(vec2 world, vec2 footprint) {
+  float distanceFromRoad = max(abs(world.x), abs(world.y)) - ${ROAD_EDGE.toFixed(1)};
+  if (distanceFromRoad <= 0.0) return 0.0;
+  float fade = smoothstep(0.0, ${(PAPER_EDGE - ROAD_EDGE).toFixed(1)}, distanceFromRoad);
+  float unevenness = fade * (1.0 - fade);
+  // The wash and stipple share the same world coordinates on all four edges.
+  fade += (vnoise(world / 72.0) - 0.5) * unevenness * 1.7;
+  float visible = 1.0 - smoothstep(2.0, 9.0, max(footprint.x, footprint.y));
+  float stipple = hash12(floor(world / 7.0));
+  float washed = smoothstep(stipple - 0.14, stipple + 0.14, fade);
+  return mix(fade, washed, 2.8 * unevenness * visible);
+}
+`;
 function scorchPatch(m, paving = false, maps = asphalt) {
   m.userData.cityPaint = true;
   m.userData.cityGround = true;
   m.userData.cityPaving = paving;
   m.userData.cityEngraving = true;
+  m.userData.scenePaper = !paving;
   m.customProgramCacheKey = () => `city-ground-surface-${paving ? 'paving' : 'road'}`;
   m.onBeforeCompile = (s) => {
     s.uniforms.uScorch = { value: scorch.tex };
@@ -193,12 +212,16 @@ function scorchPatch(m, paving = false, maps = asphalt) {
           vSW = w.xz; }`);
     s.fragmentShader = s.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D uScorch; uniform sampler2D uCityPaint; uniform sampler2D uCitySun; uniform sampler2D uSurfaceColor; varying vec2 vSW; vec4 cityPaint;\n${GLSL_COMMON}
         ${ENGRAVING_SURFACE_GLSL}
-        ${paving ? ENGRAVING_PAVING_GLSL : engravingRoadGLSL(PITCH, ROAD)}`)
+        ${paving ? ENGRAVING_PAVING_GLSL : `${engravingRoadGLSL(PITCH, ROAD)}\n${PAPER_MARGIN_GLSL}`}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-        { vec2 su = (vSW + ${HALF.toFixed(1)}) / ${(2 * HALF).toFixed(1)};
-          cityPaint = (su.x >= 0. && su.x <= 1. && su.y >= 0. && su.y <= 1.) ? texture2D(uCityPaint, vec2(su.x, 1. - su.y)) : vec4(0.);
-          float sc = (su.x > 0. && su.x < 1. && su.y > 0. && su.y < 1.) ? texture2D(uScorch, vec2(su.x, 1. - su.y)).r : 0.;
+        { vec2 su = (vSW + ${PAPER_EDGE.toFixed(1)}) / ${(2 * PAPER_EDGE).toFixed(1)};
+          vec2 groundUv = vec2(su.x, 1.0 - su.y);
+          cityPaint = texture2D(uCityPaint, groundUv);
+          float sc = texture2D(uScorch, groundUv).r;
           vec2 footprint = fwidth(vSW);
+          ${paving ? '' : `scenePaperCoverage = paperMargin(vSW, footprint);
+          float toEdge = ${PAPER_EDGE.toFixed(1)} - max(abs(vSW.x), abs(vSW.y));
+          cityPaint.a *= smoothstep(0.0, 16.0, toEdge);`}
           float engraving = engravingDistrict(vSW);
           if (engraving > 0.0) engravingSample(engraving, vSW, footprint, 0.34);
           vec2 textureUV = vSW / ${paving ? '4.0' : '12.0'};
@@ -218,8 +241,7 @@ function scorchPatch(m, paving = false, maps = asphalt) {
             float tone = ${paving ? 'engravingPaving(vSW, footprint, dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)))' : 'engravingRoad(vSW, footprint)'};
             base = mix(base, vec3(tone), cityEngravingCoverage);
           }
-          float bakedGroundSun = (su.x >= 0. && su.x <= 1. && su.y >= 0. && su.y <= 1.)
-            ? texture2D(uCitySun, vec2(su.x, 1. - su.y)).r : 1.;
+          float bakedGroundSun = texture2D(uCitySun, groundUv).r;
           diffuseColor.rgb = base * (1. - 0.85 * sc) * bakedGroundSun; }`);
   };
   return m;
@@ -261,11 +283,12 @@ export class City {
     paint.tex.colorSpace = THREE.SRGBColorSpace;
     paint.t = 0.15;
     this.paintTexture = paint.tex;
+    this.paintHalfExtent = PAPER_EDGE;
   }
   _bakeGroundSun() {
     const size = 1024, canvas = groundSun.canvas ?? document.createElement('canvas');
     if (!groundSun.canvas) canvas.width = canvas.height = size;
-    const ctx = canvas.getContext('2d'), scale = size / (2 * HALF);
+    const ctx = canvas.getContext('2d'), scale = size / (2 * PAPER_EDGE);
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, size, size);
     ctx.globalCompositeOperation = 'darken';
     ctx.fillStyle = '#adadad';
@@ -273,7 +296,7 @@ export class City {
       const lot = this.lots[index], building = this.buildings[index];
       const height = building ? lot.h * building.alive / building.cells.length : lot.h;
       if (height <= 0) continue;
-      const x0 = (lot.x + HALF) * scale, z0 = (lot.z + HALF) * scale;
+      const x0 = (lot.x + PAPER_EDGE) * scale, z0 = (lot.z + PAPER_EDGE) * scale;
       const x1 = x0 + lot.w * scale, z1 = z0 + lot.d * scale;
       const dx = -SUN_DIR.x / SUN_DIR.y * height * CH * scale;
       const dz = -SUN_DIR.z / SUN_DIR.y * height * CH * scale;
@@ -293,8 +316,7 @@ export class City {
   paintSphere(position, radius, color) {
     if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) ||
         !Number.isFinite(position.z) || !Number.isFinite(radius) || radius <= 0) return 0;
-    // The paintable road, props and voxel buildings all lie inside this volume.
-    const edge = HALF + ROAD / 2;
+    const edge = PAPER_EDGE;
     if (position.y - radius > GY * CH || position.y + radius < 0 ||
         position.x - radius > edge || position.x + radius < -edge ||
         position.z - radius > edge || position.z + radius < -edge) return 0;
@@ -362,8 +384,8 @@ export class City {
     }
     if (position.y - radius <= 0 && position.y + radius >= 0) {
       const groundRadius = Math.sqrt(Math.max(0, rr - position.y * position.y));
-      const scale = paint.canvas.width / (2 * HALF);
-      const px = (position.x + HALF) * scale, pz = (position.z + HALF) * scale;
+      const scale = paint.canvas.width / (2 * PAPER_EDGE);
+      const px = (position.x + PAPER_EDGE) * scale, pz = (position.z + PAPER_EDGE) * scale;
       if (groundRadius > 0 && px + groundRadius * scale >= 0 && px - groundRadius * scale <= paint.canvas.width &&
           pz + groundRadius * scale >= 0 && pz - groundRadius * scale <= paint.canvas.height) {
         paint.ctx.fillStyle = `#${ink.getHexString(THREE.SRGBColorSpace)}`;
@@ -387,7 +409,8 @@ export class City {
     paint.tex.needsUpdate = true; paint.dirty = false; paint.t = 0.15;
   }
   paintScorch(x, z, r, a = 0.7) {
-    const px = ((x + HALF) / (2 * HALF)) * 1024, pz = ((z + HALF) / (2 * HALF)) * 1024, pr = (r / (2 * HALF)) * 1024;
+    const scale = 1024 / (2 * PAPER_EDGE);
+    const px = (x + PAPER_EDGE) * scale, pz = (z + PAPER_EDGE) * scale, pr = r * scale;
     if (px < -pr || px > 1024 + pr || pz < -pr || pz > 1024 + pr) return;
     const g = scorch.ctx.createRadialGradient(px, pz, 0, px, pz, pr);
     g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(0.6, `rgba(255,255,255,${a * 0.5})`); g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -396,12 +419,6 @@ export class City {
   }
 
   _buildGround() {
-    // far ground
-    const farMaterial = new THREE.MeshBasicMaterial({ color: 0xf1f1f1 });
-    farMaterial.userData.cityGround = true;
-    const far = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000).rotateX(-Math.PI / 2), farMaterial);
-    far.position.y = -0.05; this.scene.add(far);
-
     // road surface with markings (canvas)
     const S = 2048, c = document.createElement('canvas'); c.width = c.height = S;
     const g = c.getContext('2d'), k = S / (2 * HALF), R = rng(7);
@@ -447,18 +464,12 @@ export class City {
     }
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
     // roads are centred on multiples of PITCH from -HALF: shift texture by half a road
-    const road = new THREE.Mesh(new THREE.PlaneGeometry(2 * HALF + ROAD, 2 * HALF + ROAD).rotateX(-Math.PI / 2),
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(2 * PAPER_EDGE, 2 * PAPER_EDGE).rotateX(-Math.PI / 2),
       scorchPatch(new THREE.MeshBasicMaterial({ map: tex })));
     this.scene.add(road);
-    // texture offset so road lines sit on x = -HALF + i*PITCH
-    tex.repeat.set((2 * HALF) / (2 * HALF + ROAD), (2 * HALF) / (2 * HALF + ROAD));
-    tex.offset.set(-(ROAD / 2) / (2 * HALF + ROAD) * 0, 0);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    // simpler: remap plane UVs to world directly
+    // Keep markings aligned to the original street grid across the expanded plane.
     const uv = road.geometry.attributes.uv, pos = road.geometry.attributes.position;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) + HALF) / (2 * HALF), 1 - (pos.getZ(i) + HALF) / (2 * HALF));
-    tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-    // shift so that line i sits at road centre (road centre = -HALF + i*PITCH, blocks start +ROAD/2)
     this.roadTex = tex;
   }
 

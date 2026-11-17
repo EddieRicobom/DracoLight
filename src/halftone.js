@@ -19,6 +19,8 @@ export function applyHalftone(root) {
       const priorKey = material.customProgramCacheKey();
       const isPointSprite = !!object.isPoints;
       const engraving = material.userData.cityEngraving ? ' * (1.0 - cityEngravingCoverage * 0.85)' : '';
+      const paper = material.userData.scenePaper
+        ? ` * (1.0 - scenePaperCoverage${material.userData.cityPaint ? ' * (1.0 - cityPaint.a)' : ''})` : '';
       // Animated tubes and ribbons rewrite position in world coordinates. Their
       // fixed UVs describe the surface and keep the marks attached to it.
       const useUV = !isPointSprite && !!object.geometry.attributes.uv &&
@@ -74,7 +76,7 @@ export function applyHalftone(root) {
             float feather = max(fwidth(distanceSquared), 0.018);
             float mark = 1.0 - smoothstep(area - feather, area + feather, distanceSquared);
             float contrast = mix(0.26, 0.44, smoothstep(0.12, 0.8, illumination));
-            gl_FragColor.rgb *= 1.0 - mark * contrast * visibility${engraving};
+            gl_FragColor.rgb *= 1.0 - mark * contrast * visibility${engraving}${paper};
           }
         `;
       };

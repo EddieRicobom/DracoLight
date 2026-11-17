@@ -30,6 +30,7 @@ export function createSky(scene) {
     fragmentShader: `uniform float uAltitude;
       uniform float uTime;
       varying vec3 vDirection;
+      float scenePaperCoverage = 0.0;
 
       float hash21(vec2 p) {
         p = fract(p * vec2(123.34, 456.21));
@@ -46,6 +47,9 @@ export function createSky(scene) {
         vec3 dir = normalize(vDirection);
         float h = dir.y;
         float a = uAltitude;
+        // The downward hemisphere supplies the blank page beyond the printed terrain.
+        float paperHorizon = mix(0.0, -0.24, a);
+        scenePaperCoverage = 1.0 - smoothstep(paperHorizon, paperHorizon + mix(0.065, 0.13, a), h);
         vec3 sunDir = normalize(vec3(-180.0, 260.0, 130.0));
         float sun = max(dot(dir, sunDir), 0.0);
 
@@ -90,14 +94,13 @@ export function createSky(scene) {
       }`,
   }));
   sky.material.userData.skyAtmosphere = true;
+  sky.material.userData.scenePaper = true;
   sky.frustumCulled = false;
   sky.renderOrder = -1000;
   scene.add(sky);
 
   const fog = scene.fog instanceof THREE.FogExp2 ? scene.fog : null;
   const baseFogDensity = fog?.density ?? 0;
-  const baseFogColor = fog?.color.clone();
-  const highFogColor = new THREE.Color(0x264d65);
   const sunlight = scene.children.find((child) => child.isDirectionalLight && child.castShadow);
   const ambient = scene.children.find((child) => child.isHemisphereLight);
   const sunColor = sunlight?.color.clone();
@@ -113,8 +116,11 @@ export function createSky(scene) {
     uniforms.uAltitude.value = altitude;
     uniforms.uTime.value = timeSeconds;
     if (fog) {
-      fog.density = THREE.MathUtils.lerp(baseFogDensity, 0.00008, altitude);
-      fog.color.copy(baseFogColor).lerp(highFogColor, altitude);
+      const aboveCity = Math.max(0, height - SKY_CITY_TOP);
+      const highFogDensity = Math.min(baseFogDensity, 0.000055);
+      // Clear the view as the player climbs so the printed city remains legible.
+      fog.density = highFogDensity + (baseFogDensity - highFogDensity) / (1 + aboveCity / 160);
+      fog.color.setScalar(0.93);
     }
     if (sunlight) {
       sunlight.color.copy(sunColor).lerp(highSunColor, altitude);

@@ -8,6 +8,7 @@ import { createCityRelics } from './relics.js';
 import { createFlightCircuit } from './flight-circuit.js';
 import { createUrbanDetails } from './urban.js';
 import { createPedestrians } from './pedestrians.js';
+import { createPilotPark } from './pilot-park.js';
 import { createPolyProps } from './polyprops.js';
 import { FX } from './fx.js';
 import { InkTrail } from './ink.js';
@@ -125,6 +126,7 @@ $('clearPaint').addEventListener('click', () => {
 choosePaint(paintColor.value);
 const beforeCity = new Set(scene.children);
 const city = new City(scene, fx);
+createPilotPark(scene, city);
 const pedestrians = createPedestrians(scene, city.blocks);
 const paintWorld = (position, radius, color) => {
   const changed = city.paintSphere(position, radius, color);

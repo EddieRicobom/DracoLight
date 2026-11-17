@@ -12,7 +12,7 @@ globalThis.document = {
     }),
   }),
 };
-const { City } = await import('../src/city.js');
+const { City, HALF } = await import('../src/city.js');
 
 test('painting reports only changed chunks and ground contacts', () => {
   const city = Object.create(City.prototype);
@@ -34,6 +34,9 @@ test('painting reports only changed chunks and ground contacts', () => {
   assert.equal(city.paintSphere(center, 2, '#0000ff'), 1);
   assert.equal(city.paintSphere(new THREE.Vector3(0, 0, 0), 2, '#00ff00'), 1);
   assert.equal(painted.length, 1);
+  assert.equal(city.paintSphere(new THREE.Vector3(HALF + 175, 0, 0), 2, '#00ff00'), 1);
+  assert.equal(city.paintSphere(new THREE.Vector3(city.paintHalfExtent + 100, 0, 0), 2, '#00ff00'), 0);
+  assert.equal(painted.length, 2);
 });
 
 test('ground texture batches paint uploads and clear uploads immediately', () => {
