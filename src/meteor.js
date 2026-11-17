@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { addInkOutline } from './outline.js';
+import { PaintBallEffects } from './paint-ball-effects.js';
 
 const BALL_RADIUS = 16;
 const SPAWN_DISTANCE = 68;
@@ -15,55 +15,7 @@ function finiteVector(v) {
   return v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
 }
 
-function paintGeometry() {
-  const geometry = new THREE.SphereGeometry(1, 24, 16);
-  const positions = geometry.attributes.position;
-  for (let i = 0; i < positions.count; i++) {
-    const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
-    const swell = 1 + 0.065 * Math.sin(x * 13 + y * 7) * Math.sin(z * 11 - y * 5)
-      + 0.035 * Math.sin(y * 21 + x * 9);
-    positions.setXYZ(i, x * swell, y * swell, z * swell);
-  }
-  positions.needsUpdate = true;
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function makeBall(color) {
-  const group = new THREE.Group();
-  const tint = new THREE.Color(color ?? 0x18a35d);
-  const main = new THREE.Mesh(paintGeometry(), new THREE.MeshPhysicalMaterial({
-    color: tint, roughness: 0.26, metalness: 0, clearcoat: 0.65, clearcoatRoughness: 0.2,
-    emissive: tint, emissiveIntensity: 0.12,
-  }));
-  main.scale.setScalar(BALL_RADIUS);
-  addInkOutline(main.material);
-  group.add(main);
-  // Uneven paint beads make the silhouette read as liquid rather than stone.
-  for (let i = 0; i < 7; i++) {
-    const angle = i * 2.39996323;
-    const y = -0.7 + i * 0.23;
-    const horizontal = Math.sqrt(Math.max(0, 1 - y * y));
-    const bead = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6),
-      new THREE.MeshPhysicalMaterial({ color: tint, roughness: 0.32, clearcoat: 0.5 }));
-    const radius = BALL_RADIUS * (0.14 + (i % 3) * 0.045);
-    addInkOutline(bead.material);
-    bead.scale.set(radius, radius * (0.7 + (i % 2) * 0.25), radius);
-    bead.position.set(Math.cos(angle) * horizontal * BALL_RADIUS * 0.95,
-      y * BALL_RADIUS * 0.95, Math.sin(angle) * horizontal * BALL_RADIUS * 0.95);
-    group.add(bead);
-  }
-  return group;
-}
-
-function disposeGroup(group) {
-  for (const child of group.children) {
-    child.geometry?.dispose();
-    child.material?.dispose();
-  }
-}
-
-// A stationary paint sphere becomes a meteor when the player's swept path crosses it.
+// A paint shot becomes a meteor when the player's swept path crosses it.
 export class PaintMeteor {
   constructor(scene, city, fx = null, audio = null) {
     this.scene = scene;
@@ -75,6 +27,7 @@ export class PaintMeteor {
     this.nextId = 1;
     this.onPaint = null;
     this.tornado = null;
+    this.effects = new PaintBallEffects(scene);
   }
 
   fire(pos, dir, color) {
@@ -83,12 +36,13 @@ export class PaintMeteor {
     if (forward.lengthSq() < 1e-8) return null;
     forward.normalize();
     while (this.balls.length >= MAX_OBJECTS) this.removeBall(0);
-    const group = makeBall(color);
-    group.position.set(pos.x, pos.y, pos.z).addScaledVector(forward, SPAWN_DISTANCE);
-    this.scene.add(group);
-    const ball = { id: this.nextId++, group, position: group.position, forward,
+    const tint = new THREE.Color(color ?? 0x18a35d);
+    const body = this.effects.makeBody(tint, BALL_RADIUS, forward);
+    body.position.set(pos.x, pos.y, pos.z).addScaledVector(forward, SPAWN_DISTANCE);
+    this.scene.add(body);
+    const ball = { id: this.nextId++, body, position: body.position, forward,
       velocity: new THREE.Vector3(), radius: BALL_RADIUS, state: 'waiting', age: 0,
-      color: new THREE.Color(color ?? 0x18a35d), paintTime: 0,
+      color: tint, paintTime: 0, trailDistance: 0,
       shotTime: 0, hitVortices: new Set() };
     this.balls.push(ball);
     this.audio?.play?.('shot');
@@ -109,8 +63,8 @@ export class PaintMeteor {
         this.onPaint(ball.position, ball.radius, ball.color);
       }
       if (ball.age > MAX_AGE) { this.removeBall(i); continue; }
+      const previous = ball.position.clone();
       if (ball.state === 'waiting') {
-        const previous = ball.position.clone();
         const travel = Math.min(dt, Math.max(0, SHOT_TIME - ball.shotTime));
         ball.position.addScaledVector(ball.forward, SHOT_SPEED * travel);
         ball.shotTime += dt;
@@ -123,17 +77,15 @@ export class PaintMeteor {
           if (ball.velocity.lengthSq() < 1e-8) ball.velocity.copy(ball.forward).multiplyScalar(40);
           ball.state = 'meteor';
           ball.age = 0;
+          this.effects.ignite(ball);
           this.fx?.sparks?.(ball.position, 12);
           this.audio?.play?.('charge');
         }
       } else {
-        const previous = ball.position.clone();
         const previousY = ball.position.y;
         ball.position.addScaledVector(ball.velocity, dt);
         ball.position.y -= 0.5 * GRAVITY * dt * dt;
         ball.velocity.y -= GRAVITY * dt;
-        ball.group.rotation.z += dt * 2.4;
-        ball.group.rotation.x += dt * 1.3;
         this.tornado?.hitByPaintBall?.(ball, previous, ball.position);
         if (previousY > ball.radius && ball.position.y <= ball.radius) {
           const fraction = (previousY - ball.radius) / Math.max(previousY - ball.position.y, 1e-8);
@@ -142,14 +94,18 @@ export class PaintMeteor {
           ball.position.y = ball.radius;
           this.startImpact(ball);
           this.removeBall(i);
+          continue;
         } else if (ball.position.y <= ball.radius) {
           ball.position.y = ball.radius;
           this.startImpact(ball);
           this.removeBall(i);
+          continue;
         }
       }
+      this.effects.flight(ball, previous, dt);
     }
     this.advanceImpacts();
+    this.effects.update(dt);
   }
 
   crossed(ball, oldPos, path, ballStart = ball.position) {
@@ -173,6 +129,7 @@ export class PaintMeteor {
     const radius = ball.radius * 2.5;
     this.onPaint?.(center, radius, ball.color);
     this.impacts.push({ center, radius, slice: 0 });
+    this.effects.burst(center, radius, ball.color, ball.velocity);
     this.fx?.explosion?.(new THREE.Vector3(center.x, 2, center.z), Math.min(15, radius * 0.3));
     this.fx?.bigDust?.(center, 18);
     if (this.fx && Number.isFinite(this.fx.shake)) this.fx.shake = Math.max(this.fx.shake, 1.4);
@@ -196,14 +153,18 @@ export class PaintMeteor {
   removeBall(index) {
     const [ball] = this.balls.splice(index, 1);
     if (!ball) return;
-    this.scene.remove(ball.group);
-    disposeGroup(ball.group);
+    this.scene.remove(ball.body);
+    ball.body.material.dispose();
   }
 
   reset() {
     while (this.balls.length) this.removeBall(this.balls.length - 1);
     this.impacts.length = 0;
+    this.effects.reset();
   }
 
-  dispose() { this.reset(); }
+  dispose() {
+    this.reset();
+    this.effects.dispose();
+  }
 }

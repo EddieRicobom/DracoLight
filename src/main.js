@@ -12,6 +12,7 @@ import { createTouchControls } from './touch.js';
 import { advanceDiveSpeed, advanceDiveImpact } from './dive.js';
 import { PaintTornado } from './tornado.js';
 import { PaintMeteor } from './meteor.js';
+import { DestructionChain } from './destruction-chain.js';
 import { makeMonochrome } from './monochrome.js';
 import { addInkOutline } from './outline.js';
 import { clamp, damp, turnToward, U } from './util.js';
@@ -133,9 +134,13 @@ polyProps.ready.then(() => {
 const meteor = new PaintMeteor(scene, city, fx, audio);
 meteor.tornado = tornado;
 meteor.onPaint = paintWorld;
+const destructionChain = new DestructionChain();
+const comboReadout = $('destructionChain');
+let shownCombo = 0, shownComboSeconds = 0;
 const resetButton = $('resetCity');
 resetButton.addEventListener('click', () => {
   city.reset();
+  destructionChain.reset();
   recordWorld({ kind: 'reset' });
   urban.reset();
   polyProps.reset();
@@ -188,6 +193,7 @@ function setPlayerMode(mode) {
     speed = FLIGHT.cruise;
   }
   playerMode = mode;
+  destructionChain.reset(city.score);
   switchButton.textContent = mode === 'dragon' ? 'Jogar como personagem' : 'Jogar como dragão';
   $('touchPaint').style.display = mode === 'dragon' ? '' : 'none';
   $('touchAscend').textContent = mode === 'dragon' ? 'Subir' : 'Pular';
@@ -443,6 +449,16 @@ function updateCamera(dt) {
 function updateHud(dt) {
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
+  destructionChain.update(city.score, elapsed, playerMode === 'dragon' && coop.role !== 'guest');
+  const { current, best, seconds } = destructionChain;
+  if (current !== shownCombo || seconds !== shownComboSeconds) {
+    shownCombo = current;
+    shownComboSeconds = seconds;
+    comboReadout.hidden = current === 0;
+    if (current > 0) {
+      comboReadout.textContent = `Combo ${current.toLocaleString('pt-BR')} · ${seconds} s · Recorde ${best.toLocaleString('pt-BR')}`;
+    }
+  }
   const mach = actualSpeed / 343;
   const machLabel = mach >= 1 ? ` · Mach ${mach.toFixed(1).replace('.', ',')}` : '';
   readouts.textContent = `Velocidade: ${Math.round(actualSpeed * 3.6).toLocaleString('pt-BR')} km/h${machLabel} · Altitude: ${Math.round(activePosition().y).toLocaleString('pt-BR')} m`;
@@ -566,7 +582,12 @@ function animateRemotes(dt) {
 }
 function applyWorld(event) {
   if (!event || typeof event.kind !== 'string') return;
-  if (event.kind === 'reset') { city.reset(); urban.reset(); polyProps.reset(); fx.burning.length = 0; meteor.reset(); $('sc').textContent = '0'; $('coopStatus').textContent = 'Cidade reconstruída pelo anfitrião.'; return; }
+  if (event.kind === 'reset') {
+    city.reset(); urban.reset(); polyProps.reset(); fx.burning.length = 0; meteor.reset();
+    destructionChain.reset();
+    $('sc').textContent = '0'; $('coopStatus').textContent = 'Cidade reconstruída pelo anfitrião.';
+    return;
+  }
   if (event.kind === 'clear') { city.clearPaint(); return; }
   if (!Array.isArray(event.p) || event.p.length !== 3 || !event.p.every(v => Number.isFinite(v) && Math.abs(v) < 30000)
       || !Number.isFinite(event.r) || event.r <= 0 || event.r > 100) return;

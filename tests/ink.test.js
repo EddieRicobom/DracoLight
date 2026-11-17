@@ -43,10 +43,60 @@ test('teleporting the trail does not paint the space between positions', () => {
   trail.update(0.1, new THREE.Vector3(500, 10, 0), direction, 100, false);
   assert.ok(contacts.length > 0);
   assert.ok(contacts.every(position => position.x > 450));
-  trail.update(0.1, new THREE.Vector3(520, 10, 0), direction, 100, false);
   const geometry = trail.mesh.geometry;
+  assert.deepEqual(geometry.getAttribute('position').updateRanges, [{ start: 0, count: 12 }]);
+  trail.update(0.1, new THREE.Vector3(520, 10, 0), direction, 100, false);
   assert.equal(geometry.drawRange.count, 12);
   assert.deepEqual([...geometry.index.array.slice(0, 12)], [0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7]);
+  assert.deepEqual(geometry.index.updateRanges, [{ start: 0, count: 12 }]);
+  assert.deepEqual(geometry.getAttribute('position').updateRanges, [{ start: 0, count: 24 }]);
+});
+
+test('only occupied ink buffer prefixes are uploaded and empty meshes stay hidden', () => {
+  const trail = new InkTrail(new THREE.Scene(), new THREE.PerspectiveCamera());
+  const direction = new THREE.Vector3(0, 0, -1);
+  const position = new THREE.Vector3(0, 20, 0);
+  const ribbon = trail.mesh.geometry, splashes = trail.splashMesh.geometry;
+
+  trail.update(.1, position, direction, 100, false, false);
+  assert.equal(trail.mesh.visible, false);
+  assert.equal(trail.splashMesh.visible, false);
+  for (const attribute of Object.values(splashes.attributes)) assert.equal(attribute.version, 0);
+
+  trail.update(.1, position, direction, 100, false);
+  assert.equal(trail.mesh.visible, false);
+  assert.equal(trail.splashMesh.visible, true);
+  assert.equal(splashes.drawRange.count, 2);
+  for (const attribute of Object.values(splashes.attributes)) {
+    assert.deepEqual(attribute.updateRanges, [{ start: 0, count: 2 * attribute.itemSize }]);
+  }
+
+  position.x = 20;
+  trail.update(.1, position, direction, 100, false);
+  assert.equal(trail.mesh.visible, true);
+  assert.equal(ribbon.drawRange.count, 6);
+  for (const attribute of Object.values(ribbon.attributes)) {
+    assert.deepEqual(attribute.updateRanges, [{ start: 0, count: 4 * attribute.itemSize }]);
+  }
+  const uvVersion = ribbon.attributes.uv.version;
+  trail.update(.1, position, direction, 100, false);
+  assert.equal(ribbon.attributes.uv.version, uvVersion);
+
+  const splashVersion = splashes.attributes.position.version;
+  trail.clear();
+  trail.update(.1, position, direction, 100, false, false);
+  assert.equal(ribbon.drawRange.count, 0);
+  assert.equal(splashes.drawRange.count, 0);
+  assert.equal(trail.mesh.visible, false);
+  assert.equal(trail.splashMesh.visible, false);
+  assert.equal(splashes.attributes.position.version, splashVersion);
+
+  trail.update(.1, position, direction, 100, false);
+  position.x = 40;
+  trail.update(.1, position, direction, 100, false);
+  assert.equal(trail.mesh.visible, true);
+  assert.equal(trail.splashMesh.visible, true);
+  assert.equal(ribbon.drawRange.count, 6);
 });
 
 test('the pattern stays attached to surviving ribbon points as older ones expire', () => {

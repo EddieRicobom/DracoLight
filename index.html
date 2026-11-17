@@ -45,6 +45,7 @@
   .lbl{letter-spacing:.13em;opacity:1}
   #score{padding:10px 15px;border-radius:12px;line-height:1.3}
   #score b{display:inline-block;margin-top:4px;font-variant-numeric:tabular-nums}
+  #destructionChain{margin-top:4px;font-size:.9em;letter-spacing:.04em;color:#ffaf9e;font-variant-numeric:tabular-nums}
   #warn{top:25%;width:max-content;max-width:calc(100vw - 40px);box-sizing:border-box;padding:11px 16px;border:1px solid rgba(147,205,255,.6);border-radius:8px;background:rgba(23,56,66,.92);text-align:center;line-height:1.4;letter-spacing:.16em}
   #cross{transition:transform .12s,border-color .12s,box-shadow .12s}
   #cross.hit{box-shadow:0 0 14px #ff6437}
@@ -186,7 +187,7 @@
 <button id="sound" type="button" aria-pressed="true">Som: ligado</button>
 <div id="hud">
   <div class="bars"><div class="lbl">Impulso</div><div class="bar" id="stP"><i></i></div></div>
-  <div id="score">Destruição<br><b id="sc">0</b></div>
+  <div id="score">Destruição<br><b id="sc">0</b><div id="destructionChain" hidden></div></div>
   <div id="fps"></div>
 </div>
 <div id="touchControls" aria-label="Controles de toque">
@@ -216,7 +217,7 @@
   <p class="mobile-help">Use os direcionais de toque para voar e toque em Tinta para disparar. Toque em pausa para escolher a cor.</p>
   <fieldset class="paint" id="paintControls">
     <legend>Tinta</legend>
-    <p>Escolha uma cor. Pause para abrir a paleta. Voe em círculos para criar um tornado de tinta.</p>
+    <p>Atravesse a bola de tinta para criar um meteoro. Voe em círculos para criar um tornado de tinta.</p>
     <div class="paint-options" role="radiogroup" aria-label="Cores de tinta">
       <label class="paint-option" title="Vermelho"><input type="radio" name="paintPreset" value="#ef4444" aria-label="Vermelho" checked><span style="--paint-color:#ef4444"></span></label>
       <label class="paint-option" title="Laranja"><input type="radio" name="paintPreset" value="#f97316" aria-label="Laranja"><span style="--paint-color:#f97316"></span></label>

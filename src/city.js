@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { rng, clamp, smooth, U, GLSL_COMMON } from './util.js';
+import { streamingDistrictIndex } from './district-streaming.js';
+import { districtArchitecture, landmarkAt, buildingArchitecture, forEachBuildingCell, landmarkProxyBoxes } from './city-architecture.js';
 
 // ---------------------------------------------------------------------------------------------
 // The city is a voxel grid of 5 m chunks. Every building is a hollow shell of chunks drawn by one
@@ -11,6 +13,9 @@ const CORE_HALF = 450, DISTRICT_BLOCKS = 10;
 export const HALF = (NB * PITCH) / 2;            // 2700
 const OX = -HALF, OZ = -HALF;
 const GX = (NB * PITCH) / CH, GZ = GX, GY = 64; // 1080 x 64 x 1080
+const MAX_DEBRIS = 3600;
+const MAX_DEBRIS_AGE = 16;
+const DEBRIS_FADE = 1.2;
 // Same fixed direction as the sunlight in main.js. Visibility is traced once per
 // streamed chunk face, not in the fragment shader or on every frame.
 const SUN_DIR = new THREE.Vector3(-180, 260, 130).normalize();
@@ -457,6 +462,22 @@ export class City {
         this.lots.push({ x, z, w, d: dd, h, style, seed: R() });
       }
     }
+    // Replace selected blocks after the seeded layout is complete, so every
+    // player builds the same landmarks without changing its random sequence.
+    for (let i = 0; i < NB; i++) for (let j = 0; j < NB; j++) {
+      const landmark = landmarkAt(i, j, NB / 2);
+      if (!landmark) continue;
+      const x0 = OX + i * PITCH + ROAD / 2, z0 = OZ + j * PITCH + ROAD / 2;
+      this.lots = this.lots.filter(lot => !(lot.x >= x0 && lot.x < x0 + BLOCK && lot.z >= z0 && lot.z < z0 + BLOCK));
+      this.blocks[i * NB + j].park = false;
+      const w = landmark.width * CH, d = landmark.depth * CH;
+      this.lots.push({ x: x0 + 5 + Math.floor((60 - w) / (2 * CH)) * CH,
+        z: z0 + 5 + Math.floor((60 - d) / (2 * CH)) * CH,
+        w, d, h: landmark.height, style: landmark.style, shape: landmark.shape, seed: 0.42, landmark: true });
+    }
+    for (const lot of this.lots) {
+      if (!lot.landmark) Object.assign(lot, buildingArchitecture(districtArchitecture(lot.x + lot.w / 2, lot.z + lot.d / 2), lot));
+    }
   }
 
   _buildChunks() {
@@ -469,26 +490,9 @@ export class City {
     const R = rng(99);
     this.lots.forEach((L, b) => {
       const cx0 = Math.round((L.x - OX) / CH), cz0 = Math.round((L.z - OZ) / CH);
-      const W = L.w / CH, D = L.d / CH;
-      const tall = L.h > 18;
-      const rectAt = (y) => {
-        let s = 0;
-        if (tall && W >= 6 && D >= 6) { if (y >= Math.floor(L.h * 0.62)) s = 1; if (y >= Math.floor(L.h * 0.84)) s = 2; }
-        else if (L.h > 10 && W >= 5 && D >= 5 && y >= Math.floor(L.h * 0.75)) s = 1;
-        return [cx0 + s, cz0 + s, cx0 + W - 1 - s, cz0 + D - 1 - s];
-      };
       const col = palettes[L.style][(R() * 4) | 0];
       const bld = { lot: L, cells: [], alive: 0, color: col, top: L.h };
-      for (let y = 0; y < L.h; y++) {
-        const [ax, az, bx, bz] = rectAt(y);
-        const up = y + 1 < L.h ? rectAt(y + 1) : null;
-        for (let x = ax; x <= bx; x++) for (let z = az; z <= bz; z++) {
-          const edge = x === ax || x === bx || z === az || z === bz;
-          const exposed = !up || x < up[0] || x > up[2] || z < up[1] || z > up[3];
-          // floor slabs every 6 levels hold the shell together and give the inside a floor
-          if (edge || exposed || (y % 6 === 5)) cells.push(x, y, z, b);
-        }
-      }
+      forEachBuildingCell(L, CH, (x, y, z) => cells.push(cx0 + x, y, cz0 + z, b));
       this.buildings.push(bld);
     });
 
@@ -644,10 +648,9 @@ export class City {
   _refreshProxy(P) {
     if (!P.proxy || !P.proxyDirty) return;
     const m = new THREE.Matrix4();
-    P.proxyIds.forEach((b, local) => {
-      const L = this.lots[b], B = this.buildings[b];
-      const h = L.h * CH * (B.alive / B.cells.length);
-      if (h > 0) m.makeScale(L.w, h, L.d).setPosition(L.x + L.w / 2, h / 2, L.z + L.d / 2);
+    P.proxyIds.forEach(({ b, box }, local) => {
+      const B = this.buildings[b], ratio = B.alive / B.cells.length;
+      if (ratio > 0) m.makeScale(box.w, box.h * ratio, box.d).setPosition(box.x, box.y * ratio, box.z);
       else m.copy(ZERO);
       P.proxy.setMatrixAt(local, m);
     });
@@ -659,16 +662,20 @@ export class City {
     this.lots.forEach((L, b) => {
       const col = Math.floor((L.x - OX) / (DISTRICT_BLOCKS * PITCH));
       const row = Math.floor((L.z - OZ) / (DISTRICT_BLOCKS * PITCH));
-      groups[row * count + col].push(b);
+      const boxes = L.landmark ? landmarkProxyBoxes(L, CH) : [{
+        x: L.x + L.w / 2, y: L.h * CH / 2, z: L.z + L.d / 2,
+        w: L.w, h: L.h * CH, d: L.d,
+      }];
+      for (const box of boxes) groups[row * count + col].push({ b, box });
     });
     const proxyMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const m = new THREE.Matrix4(), c = new THREE.Color();
     groups.forEach((ids, part) => {
       if (!ids.length) return;
       const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), proxyMat, ids.length);
-      ids.forEach((b, local) => {
-        const L = this.lots[b], B = this.buildings[b], h = L.h * CH;
-        m.makeScale(L.w, h, L.d).setPosition(L.x + L.w / 2, h / 2, L.z + L.d / 2);
+      ids.forEach(({ b, box }, local) => {
+        const B = this.buildings[b];
+        m.makeScale(box.w, box.h, box.d).setPosition(box.x, box.y, box.z);
         mesh.setMatrixAt(local, m);
         c.setRGB(B.color[0], B.color[1], B.color[2], THREE.SRGBColorSpace); mesh.setColorAt(local, c);
       });
@@ -678,8 +685,9 @@ export class City {
   _streamDistricts(focus) {
     if (!focus) return;
     const count = NB / DISTRICT_BLOCKS, width = DISTRICT_BLOCKS * PITCH;
-    const col = clamp(Math.floor((focus.x - OX) / width), 0, count - 1);
-    const row = clamp(Math.floor((focus.z - OZ) / width), 0, count - 1);
+    const stream = { origin: OX, width, count, margin: PITCH };
+    const col = this.streamCol = streamingDistrictIndex(focus.x, this.streamCol, stream);
+    const row = this.streamRow = streamingDistrictIndex(focus.z, this.streamRow, stream);
     let next = -1, nearest = Infinity;
     for (let p = 0; p < this.meshes.length; p++) {
       const dx = Math.abs(p % count - col), dz = Math.abs(Math.floor(p / count) - row);
@@ -731,7 +739,7 @@ export class City {
     // maple trees: trunk + three-lobed crown
     const trunkG = new THREE.CylinderGeometry(0.22, 0.35, 4, 6).translate(0, 2, 0);
     const crownG = (() => {
-      const g = new THREE.IcosahedronGeometry(2.6, 2); const a = g.attributes.position, v = new THREE.Vector3();
+      const g = new THREE.IcosahedronGeometry(2.6, 1); const a = g.attributes.position, v = new THREE.Vector3();
       for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i); const n = 1 + 0.22 * Math.sin(v.x * 2.1 + v.y * 1.3) * Math.cos(v.z * 1.7 - v.y); v.multiplyScalar(n); v.y *= 0.8; a.setXYZ(i, v.x, v.y + 5.4, v.z); }
       g.computeVertexNormals(); return g;
     })();
@@ -993,18 +1001,22 @@ export class City {
 
   // ----------------------------------------------------------------------- debris
   _buildDebris() {
-    const N = 9000; this.dN = N;
+    const N = MAX_DEBRIS; this.dN = N;
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff }), N);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
+    mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = false;
     mesh.count = 0;
-    const c = new THREE.Color(1, 1, 1); for (let i = 0; i < N; i++) mesh.setColorAt(i, c);
+    mesh.visible = false;
     this.dMesh = mesh; this.scene.add(mesh);
     this.dP = new Float32Array(N * 3); this.dV = new Float32Array(N * 3); this.dQ = new Float32Array(N * 4); this.dW = new Float32Array(N * 3);
     this.dS = new Float32Array(N); this.dL = new Float32Array(N); this.dState = new Uint8Array(N); this.dHeavy = new Uint8Array(N);
+    this.dAge = new Float32Array(N);
     this.dRest = new Int32Array(N); // supporting chunk index + 1, or zero for the ground
-    this.dNext = 0; this.dHigh = 0; this.dLive = 0;
+    this.dLive = 0; this.dReplace = 0;
+    this.dColorDirty = [Infinity, -1];
   }
   // Restore the original city in place, including districts currently represented by proxies.
   reset() {
@@ -1052,42 +1064,81 @@ export class City {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.computeBoundingSphere();
     }));
-    this.dState.fill(0);
-    this.dRest.fill(0);
-    this.dNext = this.dHigh = this.dLive = 0;
+    this.dLive = this.dReplace = 0;
+    this.dColorDirty[0] = Infinity; this.dColorDirty[1] = -1;
     this.dMesh.count = 0;
+    this.dMesh.visible = false;
     scorch.ctx.fillStyle = '#000';
     scorch.ctx.fillRect(0, 0, scorch.canvas.width, scorch.canvas.height);
     scorch.tex.needsUpdate = true;
     scorch.dirty = false; scorch.t = 0;
   }
   spawnDebris(x, y, z, vx, vy, vz, s, r, g, b, heavy = false) {
-    // ring allocation: overwrite the oldest slot
-    const i = this.dNext; this.dNext = (this.dNext + 1) % this.dN;
-    if (i + 1 > this.dHigh) this.dHigh = i + 1;
+    let i = this.dLive;
+    if (i < this.dN) this.dLive++;
+    else {
+      // Structural collapse takes priority over cosmetic fragments at the cap.
+      if (!heavy) return;
+      i = this.dReplace;
+      this.dReplace = (i + 1) % this.dN;
+    }
     this.dP[i * 3] = x; this.dP[i * 3 + 1] = y; this.dP[i * 3 + 2] = z;
     this.dV[i * 3] = vx; this.dV[i * 3 + 1] = vy; this.dV[i * 3 + 2] = vz;
     const q = _q.setFromEuler(_e.set(heavy ? rnd(0.04) : Math.random() * 6, heavy ? rnd(0.04) : Math.random() * 6, heavy ? rnd(0.04) : Math.random() * 6));
     this.dQ[i * 4] = q.x; this.dQ[i * 4 + 1] = q.y; this.dQ[i * 4 + 2] = q.z; this.dQ[i * 4 + 3] = q.w;
     const w = heavy ? 0.08 : 8;
     this.dW[i * 3] = rnd(w); this.dW[i * 3 + 1] = rnd(w); this.dW[i * 3 + 2] = rnd(w);
-    this.dS[i] = s; this.dL[i] = 0; this.dState[i] = 1; this.dHeavy[i] = heavy ? 1 : 0; this.dRest[i] = 0;
-    this.dMesh.setColorAt(i, _c.setRGB(r, g, b, THREE.SRGBColorSpace)); this.dMesh.instanceColor.needsUpdate = true;
+    this.dS[i] = s; this.dL[i] = 0; this.dAge[i] = 0; this.dState[i] = 1; this.dHeavy[i] = heavy ? 1 : 0; this.dRest[i] = 0;
+    this.dMesh.setColorAt(i, _c.setRGB(r, g, b, THREE.SRGBColorSpace));
+    this._markDebrisColor(i);
+  }
+  _markDebrisColor(i) {
+    const dirty = this.dColorDirty;
+    if (i < dirty[0]) dirty[0] = i;
+    if (i > dirty[1]) dirty[1] = i;
+  }
+  _removeDebris(i) {
+    // Keep render slots packed so expired fragments cost no CPU or GPU time.
+    const last = --this.dLive;
+    if (i === last) return;
+    const from = last * 3, to = i * 3;
+    this.dP.copyWithin(to, from, from + 3);
+    this.dV.copyWithin(to, from, from + 3);
+    this.dW.copyWithin(to, from, from + 3);
+    this.dQ.copyWithin(i * 4, last * 4, last * 4 + 4);
+    this.dS[i] = this.dS[last]; this.dL[i] = this.dL[last]; this.dAge[i] = this.dAge[last];
+    this.dState[i] = this.dState[last]; this.dHeavy[i] = this.dHeavy[last]; this.dRest[i] = this.dRest[last];
+    this.dMesh.instanceMatrix.array.copyWithin(i * 16, last * 16, last * 16 + 16);
+    this.dMesh.instanceColor.array.copyWithin(to, from, from + 3);
+    this._markDebrisColor(i);
   }
   _updateDebris(dt) {
+    if (!this.dLive) return;
     const P = this.dP, V = this.dV, Q = this.dQ, W = this.dW, S = this.dS, L = this.dL, st = this.dState, mesh = this.dMesh;
     const arr = mesh.instanceMatrix.array;
     let landedHeavy = 0, impacts = 0, firstDirty = Infinity, lastDirty = -1;
-    for (let i = 0; i < this.dHigh; i++) {
-      if (!st[i]) continue;
+    for (let i = 0; i < this.dLive; i++) {
       L[i] += dt;
+      this.dAge[i] += dt;
+      const restTime = this.dHeavy[i] ? 4 : 2;
+      const fading = Math.max(this.dAge[i] - MAX_DEBRIS_AGE, st[i] === 2 ? L[i] - restTime : 0);
+      if (fading >= DEBRIS_FADE) {
+        this._removeDebris(i);
+        if (i < this.dLive) {
+          if (i < firstDirty) firstDirty = i;
+          if (i > lastDirty) lastDirty = i;
+        }
+        i--;
+        continue;
+      }
       // Rubble resting on a destroyed roof resumes falling on the next frame.
-      if (st[i] === 2 && this.dRest[i] && !this.alive[this.dRest[i] - 1]) {
+      if (st[i] === 2 && fading <= 0 && this.dRest[i] && !this.alive[this.dRest[i] - 1]) {
         st[i] = 1; L[i] = 0; V[i * 3 + 1] = 0; this.dRest[i] = 0;
       }
-      if (st[i] === 2 && L[i] <= 40) continue; // settled rubble needs no matrix upload
+      if (st[i] === 2 && fading <= 0) continue; // settled rubble needs no matrix upload
       let s = S[i];
-      if (st[i] === 1) {
+      let sink = 0;
+      if (st[i] === 1 && fading <= 0) {
         const p = i * 3;
         const wx = W[p], wy = W[p + 1], wz = W[p + 2];
         _q.set(Q[i * 4], Q[i * 4 + 1], Q[i * 4 + 2], Q[i * 4 + 3]);
@@ -1130,10 +1181,11 @@ export class City {
             V[i * 3 + 1] *= -0.25; V[i * 3] *= 0.6; V[i * 3 + 2] *= 0.6; W[i * 3] *= 0.5; W[i * 3 + 1] *= 0.5; W[i * 3 + 2] *= 0.5;
           } else { st[i] = 2; L[i] = 0; this.dRest[i] = supportId; }
         }
-        if (L[i] > 20) { st[i] = 2; L[i] = 0; }
-      } else if (st[i] === 2) {
-        // rubble rests, then sinks away
-        if (L[i] > 40) { P[i * 3 + 1] -= dt * 0.6; if (P[i * 3 + 1] < -s) { st[i] = 0; s = 0; } }
+      } else {
+        // Shrink into the supporting surface, including elevated roofs.
+        const fade = smooth(0, DEBRIS_FADE, fading);
+        sink = s * fade * 0.35;
+        s *= 1 - fade;
       }
       // write matrix (compose from quaternion)
       const x = Q[i * 4], y = Q[i * 4 + 1], z = Q[i * 4 + 2], w = Q[i * 4 + 3];
@@ -1141,18 +1193,27 @@ export class City {
       const o = i * 16;
       if (i < firstDirty) firstDirty = i;
       if (i > lastDirty) lastDirty = i;
-      if (!st[i]) { for (let k = 0; k < 16; k++) arr[o + k] = 0; continue; }
       arr[o] = (1 - (yy + zz)) * s; arr[o + 1] = (xy + wz) * s; arr[o + 2] = (xz - wy) * s; arr[o + 3] = 0;
       arr[o + 4] = (xy - wz) * s; arr[o + 5] = (1 - (xx + zz)) * s; arr[o + 6] = (yz + wx) * s; arr[o + 7] = 0;
       arr[o + 8] = (xz + wy) * s; arr[o + 9] = (yz - wx) * s; arr[o + 10] = (1 - (xx + yy)) * s; arr[o + 11] = 0;
-      arr[o + 12] = P[i * 3]; arr[o + 13] = P[i * 3 + 1]; arr[o + 14] = P[i * 3 + 2]; arr[o + 15] = 1;
+      arr[o + 12] = P[i * 3]; arr[o + 13] = P[i * 3 + 1] - sink; arr[o + 14] = P[i * 3 + 2]; arr[o + 15] = 1;
     }
-    mesh.count = this.dHigh;
-    if (lastDirty >= 0) {
+    mesh.count = this.dLive;
+    mesh.visible = this.dLive > 0;
+    lastDirty = Math.min(lastDirty, this.dLive - 1);
+    if (firstDirty <= lastDirty) {
       mesh.instanceMatrix.clearUpdateRanges();
       mesh.instanceMatrix.addUpdateRange(firstDirty * 16, (lastDirty - firstDirty + 1) * 16);
       mesh.instanceMatrix.needsUpdate = true;
     }
+    const [firstColor, lastColor] = this.dColorDirty;
+    const colorEnd = Math.min(lastColor, this.dLive - 1);
+    if (firstColor <= colorEnd) {
+      mesh.instanceColor.clearUpdateRanges();
+      mesh.instanceColor.addUpdateRange(firstColor * 3, (colorEnd - firstColor + 1) * 3);
+      mesh.instanceColor.needsUpdate = true;
+    }
+    this.dColorDirty[0] = Infinity; this.dColorDirty[1] = -1;
     if (landedHeavy > 0) this.onHeavyLand && this.onHeavyLand(landedHeavy);
   }
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { rng } from './util.js';
+import { roofBounds } from './city-architecture.js';
 
 // Bake a neutral overhead fill into the equipment itself. The roof details
 // keep their volume when the character lights move across the city.
@@ -33,28 +34,30 @@ export function createUrbanDetails(scene, city) {
   }
 
   for (const lot of city.lots) {
-    const w = lot.w / 5, d = lot.d / 5;
-    const tall = lot.h > 18 && w >= 6 && d >= 6;
-    const inset = tall ? 2 : lot.h > 10 && w >= 5 && d >= 5 ? 1 : 0;
-    const cols = w - inset * 2, rows = d - inset * 2;
+    const { x0, z0, x1, z1 } = roofBounds(lot, 5);
+    const tall = lot.h > 18;
+    const cols = x1 - x0, rows = z1 - z0;
     if (cols < 2 || rows < 2) continue;
     const roofY = lot.h * 5;
     const used = new Set();
     const unitCount = Math.min(3, Math.max(1, Math.floor(cols * rows / 14)));
     for (let k = 0; k < unitCount + 1; k++) {
-      // Keep equipment in the interior, away from the roof edge and setbacks.
-      let col, row, key;
+      // Prefer the interior, but give narrow roofs and courtyards an edge fallback.
+      let x, z, support = -1;
       for (let tries = 0; tries < 12; tries++) {
-        col = inset + 1 + Math.floor(random() * Math.max(1, cols - 2));
-        row = inset + 1 + Math.floor(random() * Math.max(1, rows - 2));
-        key = col + row * w;
-        if (!used.has(key)) break;
+        const insetX = tries < 6 && cols > 2 ? 1 : 0;
+        const insetZ = tries < 6 && rows > 2 ? 1 : 0;
+        const col = insetX + Math.floor(random() * (cols - 2 * insetX));
+        const row = insetZ + Math.floor(random() * (rows - 2 * insetZ));
+        const key = col + row * cols;
+        if (used.has(key)) continue;
+        x = lot.x + (x0 + col + 0.5) * 5;
+        z = lot.z + (z0 + row + 0.5) * 5;
+        support = city.chunkAt(x, roofY - 2.5, z);
+        if (support < 0) continue;
+        used.add(key);
+        break;
       }
-      if (used.has(key)) continue;
-      used.add(key);
-      const x = lot.x + (col + 0.5) * 5;
-      const z = lot.z + (row + 0.5) * 5;
-      const support = city.chunkAt(x, roofY - 2.5, z);
       if (support < 0) continue;
       const shade = 0.75 + random() * 0.35;
       if (k < unitCount) {

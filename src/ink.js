@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 
+function updatePrefix(attribute, count) {
+  // Every update rewrites the active prefix, so superseded ranges can be discarded.
+  attribute.clearUpdateRanges();
+  attribute.addUpdateRange(0, count * attribute.itemSize);
+  attribute.needsUpdate = true;
+}
+
 // Fixed-size meshes keep suspended ink cheap even after a long flight.
 export class InkTrail {
   constructor(scene, camera, lateralOffset = 0) {
@@ -63,6 +70,7 @@ export class InkTrail {
         }`,
     }));
     this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
     scene.add(this.mesh);
 
     this.splashPositions = new Float32Array(this.maxSplashes * 3);
@@ -106,6 +114,7 @@ export class InkTrail {
         }`,
     }));
     this.splashMesh.frustumCulled = false;
+    this.splashMesh.visible = false;
     scene.add(this.splashMesh);
   }
 
@@ -116,6 +125,8 @@ export class InkTrail {
     this.splashes.length = 0;
     this.mesh.geometry.setDrawRange(0, 0);
     this.splashMesh.geometry.setDrawRange(0, 0);
+    this.mesh.visible = false;
+    this.splashMesh.visible = false;
   }
 
   addSplashes(position, direction, speed, boosting) {
@@ -212,8 +223,9 @@ export class InkTrail {
       }
     }
     const geometry = this.mesh.geometry;
+    let indexCount = geometry.drawRange.count;
     if (pointsChanged) {
-      let indexCount = 0;
+      indexCount = 0;
       for (let i = 0; i < n - 1; i++) {
         // A teleport, sharp frame skip or reset must not stretch ink into a sheet.
         if (!this.points[i + 1].continuous) continue;
@@ -226,13 +238,17 @@ export class InkTrail {
         this.indices[indexCount++] = j + 3;
       }
       geometry.setDrawRange(0, indexCount);
-      geometry.index.needsUpdate = true;
-      geometry.attributes.aColor.needsUpdate = true;
-      geometry.attributes.uv.needsUpdate = true;
+      this.mesh.visible = indexCount > 0;
     }
-    if (n > 0) {
-      geometry.attributes.position.needsUpdate = true;
-      geometry.attributes.aAlpha.needsUpdate = true;
+    if (this.mesh.visible) {
+      const vertexCount = this.indices[indexCount - 1] + 1;
+      if (pointsChanged) {
+        updatePrefix(geometry.index, indexCount);
+        updatePrefix(geometry.attributes.aColor, vertexCount);
+        updatePrefix(geometry.attributes.uv, vertexCount);
+      }
+      updatePrefix(geometry.attributes.position, vertexCount);
+      updatePrefix(geometry.attributes.aAlpha, vertexCount);
     }
 
     let active = 0;
@@ -271,7 +287,11 @@ export class InkTrail {
       }
       this.splashPaintCursor = (this.splashPaintCursor + 4) % active;
     }
-    this.splashMesh.geometry.setDrawRange(0, active);
-    for (const attribute of Object.values(this.splashMesh.geometry.attributes)) attribute.needsUpdate = true;
+    const splashGeometry = this.splashMesh.geometry;
+    splashGeometry.setDrawRange(0, active);
+    this.splashMesh.visible = active > 0;
+    if (active) {
+      for (const attribute of Object.values(splashGeometry.attributes)) updatePrefix(attribute, active);
+    }
   }
 }

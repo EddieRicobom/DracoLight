@@ -44,6 +44,31 @@ test('a travelling paint ball sweeps through a tornado and can still become a me
   tornado.clear();
 });
 
+test('paint droplets mark the shot, its charge and its impact in a shared batch', () => {
+  const scene = new THREE.Scene();
+  const meteor = new PaintMeteor(scene, null);
+  const ball = meteor.fire(new THREE.Vector3(0, 25, 0), new THREE.Vector3(0, 0, -1), '#ef4444');
+  meteor.update(0.1, null, null, 0);
+  const drops = scene.children.find(child => child.isInstancedMesh);
+  assert.ok(drops?.count > 0);
+  assert.ok(ball.body.scale.z > ball.body.scale.x);
+  const initialGlow = ball.body.material.emissiveIntensity;
+
+  const start = ball.position.clone().add(new THREE.Vector3(0, 0, 40));
+  const end = ball.position.clone().add(new THREE.Vector3(0, 0, -50));
+  meteor.update(0.1, start, end, new THREE.Vector3(0, -160, -60));
+  assert.equal(ball.state, 'meteor');
+  assert.ok(ball.body.material.emissiveIntensity > initialGlow);
+  assert.ok(drops.count >= 10);
+
+  meteor.update(0.1, null, null, 0);
+  assert.equal(meteor.balls.length, 0);
+  assert.ok(drops.count >= 25);
+  meteor.update(1, null, null, 0);
+  assert.equal(scene.children.length, 0);
+  meteor.dispose();
+});
+
 test('monochrome preserves existing material shader hooks and avoids duplicate wrapping', () => {
   const material = new THREE.MeshBasicMaterial();
   material.onBeforeCompile = shader => { shader.fragmentShader = shader.fragmentShader.replace('gl_FragColor=vec4(1.);', 'gl_FragColor=vec4(.5);'); };

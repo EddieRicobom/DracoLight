@@ -54,7 +54,11 @@ test('reset clears stale solar work and restores the ground and streamed face ba
   const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial(), 1);
   city.meshes = [{ ids: [0], mesh, burnAttribute: new THREE.InstancedBufferAttribute(new Float32Array(1), 1) }];
   city.props = []; city.propMeshes = []; city.propInitialMatrices = [];
-  city.dState = new Uint8Array(1); city.dRest = new Int32Array(1); city.dMesh = { count: 1 };
+  city.scene = new THREE.Scene();
+  city._buildDebris();
+  city.spawnDebris(2.5, 2.5, 2.5, 0, 0, 0, 1, 1, 1, 1);
+  city._updateDebris(0.05);
+  assert.equal(city.dMesh.count, 1);
 
   city.reset();
   assert.equal(groundBakes, 1);
@@ -63,4 +67,6 @@ test('reset clears stale solar work and restores the ground and streamed face ba
   assert.equal(city.sunShadowPending.size, 0);
   assert.equal(city.sunBaked[0], 0);
   assert.deepEqual([...sun.array], [255, 255, 255]);
+  assert.equal(city.dMesh.count, 0);
+  assert.equal(city.dMesh.visible, false);
 });
