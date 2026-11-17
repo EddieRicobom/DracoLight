@@ -165,9 +165,17 @@ function footprint(rectangles, width, depth) {
   return mask;
 }
 
+export function groundEntrance(lot, chunkSize) {
+  const designated = lot.shape === 'crown' || (lot.seed < 0.08 && lot.h >= 4
+    && (lot.shape === 'tiered' || lot.shape === 'terrace' || lot.shape === 'industrial'));
+  if (!designated || lot.w < chunkSize * 5 || lot.d < chunkSize * 5) return;
+  return { x: Math.floor((lot.w / chunkSize - 1) / 2), z: lot.d / chunkSize - 1 };
+}
+
 export function forEachBuildingCell(lot, chunkSize, emit) {
   const w = lot.w / chunkSize, d = lot.d / chunkSize;
   const stride = w + 2;
+  const entrance = groundEntrance(lot, chunkSize);
   const masks = sectionsFor(lot, chunkSize).map(({ bottom, top, rectangles }) => ({
     bottom, top, mask: footprint(rectangles, w, d),
   }));
@@ -181,6 +189,7 @@ export function forEachBuildingCell(lot, chunkSize, emit) {
       for (let x = 0; x < w; x++) for (let z = 0; z < d; z++) {
         const i = (z + 1) * stride + x + 1;
         if (!mask[i]) continue;
+        if (y === 0 && entrance && x === entrance.x && z === entrance.z) continue;
         if (slab || !mask[i - 1] || !mask[i + 1]
           || !mask[i - stride] || !mask[i + stride]) emit(x, y, z);
       }

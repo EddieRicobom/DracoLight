@@ -53,7 +53,8 @@ test('reset clears stale solar work and restores the ground and streamed face ba
   geometry.setAttribute('aSun', sun);
   const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial(), 1);
   city.meshes = [{ ids: [0], mesh, burnAttribute: new THREE.InstancedBufferAttribute(new Float32Array(1), 1) }];
-  city.props = []; city.propMeshes = []; city.propInitialMatrices = [];
+  city.districts = [{ batches: [0] }];
+  city.props = []; city.propGroups = [];
   city.scene = new THREE.Scene();
   city._buildDebris();
   city.spawnDebris(2.5, 2.5, 2.5, 0, 0, 0, 1, 1, 1, 1);
@@ -69,4 +70,25 @@ test('reset clears stale solar work and restores the ground and streamed face ba
   assert.deepEqual([...sun.array], [255, 255, 255]);
   assert.equal(city.dMesh.count, 0);
   assert.equal(city.dMesh.visible, false);
+});
+
+test('consecutive changes to a culled batch preserve pending matrix and paint uploads', () => {
+  const city = Object.create(City.prototype);
+  city._buildPaint(); city._buildScorch();
+  city._streamDistricts = () => {};
+  city._updateDebris = () => {};
+  city._dirtyB = new Set();
+  city._collapseT = 0;
+  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 5);
+  const paintAttribute = new THREE.InstancedBufferAttribute(new Uint8Array(20), 4, true);
+  const part = { mesh, paintAttribute, matrixDirty: [0, 0], paintDirty: [0, 0], burnDirty: [Infinity, -1] };
+  city.meshes = [part];
+
+  city.update(.01, null);
+  part.matrixDirty = [3, 4];
+  part.paintDirty = [3, 4];
+  city.update(.01, null);
+
+  assert.deepEqual(mesh.instanceMatrix.updateRanges, [{ start: 0, count: 80 }]);
+  assert.deepEqual(paintAttribute.updateRanges, [{ start: 0, count: 20 }]);
 });

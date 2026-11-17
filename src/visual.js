@@ -63,20 +63,24 @@ export function createSky(scene) {
         vec3 color = mix(city, upper, a);
 
         // A distant cloud ocean appears below the high-altitude horizon.
-        vec2 cloudUv = dir.xz / max(0.09, -h + 0.22);
-        float cloud = noise2(cloudUv * 13.0 + vec2(uTime * 0.003, 0.0)) * 0.62
-                    + noise2(cloudUv * 27.0 - vec2(uTime * 0.006, 0.0)) * 0.38;
-        float cloudMask = smoothstep(0.44, 0.67, cloud) * (1.0 - smoothstep(-0.25, -0.04, h));
-        color += vec3(0.18, 0.21, 0.23) * cloudMask * smoothstep(0.13, 0.7, a);
+        if (a > 0.13 && h < -0.04) {
+          vec2 cloudUv = dir.xz / max(0.09, -h + 0.22);
+          float cloud = noise2(cloudUv * 13.0 + vec2(uTime * 0.003, 0.0)) * 0.62
+                      + noise2(cloudUv * 27.0 - vec2(uTime * 0.006, 0.0)) * 0.38;
+          float cloudMask = smoothstep(0.44, 0.67, cloud) * (1.0 - smoothstep(-0.25, -0.04, h));
+          color += vec3(0.18, 0.21, 0.23) * cloudMask * smoothstep(0.13, 0.7, a);
+        }
 
         // Sparse fixed stars become visible above the light-scattering layer.
-        vec2 starUv = vec2(atan(dir.z, dir.x), asin(h)) * vec2(95.0, 190.0);
-        vec2 cell = floor(starUv);
-        float star = step(0.9977, hash21(cell));
-        vec2 centre = fract(starUv) - 0.5;
-        star *= exp(-dot(centre, centre) * 95.0);
-        star *= smoothstep(0.05, 0.3, h) * smoothstep(0.38, 0.9, a);
-        color += vec3(0.58, 0.72, 1.0) * star;
+        if (a > 0.38 && h > 0.05) {
+          vec2 starUv = vec2(atan(dir.z, dir.x), asin(h)) * vec2(95.0, 190.0);
+          vec2 cell = floor(starUv);
+          float star = step(0.9977, hash21(cell));
+          vec2 centre = fract(starUv) - 0.5;
+          star *= exp(-dot(centre, centre) * 95.0);
+          star *= smoothstep(0.05, 0.3, h) * smoothstep(0.38, 0.9, a);
+          color += vec3(0.58, 0.72, 1.0) * star;
+        }
 
         color += mix(vec3(1.0, 0.48, 0.25), vec3(0.52, 0.68, 0.92), a)
                  * pow(sun, 12.0) * mix(0.13, 0.055, a);
@@ -156,7 +160,8 @@ export function createVisualPipeline(renderer, scene, camera) {
   const composer = new EffectComposer(renderer);
   // Bloom works in linear HDR, before the final tone and color-space conversion.
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.3, 1.35));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.3, 1.35);
+  composer.addPass(bloom);
   const grade = new ShaderPass({
     uniforms: {
       tDiffuse: { value: null },
@@ -218,6 +223,19 @@ export function createVisualPipeline(renderer, scene, camera) {
     catch { /* Private browsing can disable storage. */ }
   };
   composer.isTiltShiftEnabled = () => grade.uniforms.uTiltShift.value > 0.5;
+  const lightEffectsControl = typeof document !== 'undefined' ? document.getElementById('lightEffects') : null;
+  const lightEffectsKey = 'dracoLight.lightEffects';
+  composer.setLightEffects = (enabled) => {
+    bloom.enabled = !enabled;
+    if (lightEffectsControl) lightEffectsControl.checked = enabled;
+    try { window.localStorage.setItem(lightEffectsKey, enabled ? 'on' : 'off'); }
+    catch { /* Private browsing can disable storage. */ }
+  };
+  let savedLightEffects;
+  try { savedLightEffects = window.localStorage.getItem(lightEffectsKey); }
+  catch { /* Keep the full effects by default. */ }
+  if (savedLightEffects === 'on') composer.setLightEffects(true);
+  lightEffectsControl?.addEventListener('change', () => composer.setLightEffects(lightEffectsControl.checked));
   let savedTiltShift;
   try { savedTiltShift = window.localStorage.getItem(tiltShiftStorageKey); }
   catch { /* Use the standard image. */ }

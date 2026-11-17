@@ -1,9 +1,18 @@
 import * as THREE from 'three';
 
+const FULL_TURN = Math.PI * 1.8;
+const MIN_SPIRAL_RADIUS = 15;
+const MAX_SPIRAL_RADIUS = 500;
+
 // Recognize a sustained, coherent horizontal turn whose path bends back on itself.
 export class SpiralDetector {
   constructor() { this.reset(); }
-  reset() { this.generation = (this.generation || 0) + 1; this.samples = []; this.lastHeading = null; this.sign = 0; this.turn = 0; this.duration = 0; this.distance = 0; this.speedTime = 0; this.emittedAt = 0; this.straightTime = 0; }
+  reset() { this.generation = (this.generation || 0) + 1; this.samples = []; this.lastHeading = null; this.sign = 0; this.turn = 0; this.duration = 0; this.distance = 0; this.speedTime = 0; this.emittedAt = 0; this.straightTime = 0; this.radius = 0; }
+  get formationProgress() {
+    if (this.emittedAt || this.straightTime > 0.25 || this.radius < MIN_SPIRAL_RADIUS || this.radius > MAX_SPIRAL_RADIUS) return 0;
+    // Leave the final step for the frame that actually creates the vortex.
+    return Math.max(0, Math.min(this.turn / FULL_TURN, 0.98));
+  }
   update(dt, pos, forward, speed) {
     if (!(dt > 0 && dt <= 0.25) || !pos || !forward || speed < 5) { this.reset(); return null; }
     const heading = Math.atan2(forward.x, forward.z);
@@ -31,8 +40,9 @@ export class SpiralDetector {
     this.samples.push({ x: pos.x, z: pos.z });
     if (this.samples.length > 800) this.samples.shift();
     const radius = this.distance / Math.max(this.turn, 0.001);
+    this.radius = radius;
     const displacement = Math.hypot(pos.x - this.samples[0].x, pos.z - this.samples[0].z);
-    if (this.turn < Math.PI * 1.8 || this.duration < 1 || radius < 15 || radius > 500 || (!this.emittedAt && displacement > radius * 1.4) || this.duration - this.emittedAt < 1.5) return null;
+    if (this.turn < FULL_TURN || this.duration < 1 || radius < MIN_SPIRAL_RADIUS || radius > MAX_SPIRAL_RADIUS || (!this.emittedAt && displacement > radius * 1.4) || this.duration - this.emittedAt < 1.5) return null;
     this.emittedAt = this.duration;
     let x = 0, z = 0;
     for (const sample of this.samples) { x += sample.x; z += sample.z; }

@@ -4,12 +4,15 @@ import { streamingDistrictIndex } from './district-streaming.js';
 import { districtArchitecture, landmarkAt, buildingArchitecture, forEachBuildingCell, landmarkProxyBoxes } from './city-architecture.js';
 
 // ---------------------------------------------------------------------------------------------
-// The city is a voxel grid of 5 m chunks. Every building is a hollow shell of chunks drawn by one
-// InstancedMesh; a chunk lives in `grid` so destruction, ray casts and collapse are lookups.
+// The city is a voxel grid of 5 m chunks. Hollow buildings are drawn in spatial batches
+// so the renderer can skip off-camera streets while the collision grid stays complete.
 // ---------------------------------------------------------------------------------------------
 export const CH = 5;
 const NB = 60, ROAD = 20, BLOCK = 70, PITCH = ROAD + BLOCK;
 const CORE_HALF = 450, DISTRICT_BLOCKS = 10;
+const BATCHES_PER_SIDE = 2;
+const DISTRICT_COUNT = NB / DISTRICT_BLOCKS, DISTRICT_WIDTH = DISTRICT_BLOCKS * PITCH;
+const BATCH_WIDTH = DISTRICT_WIDTH / BATCHES_PER_SIDE;
 export const HALF = (NB * PITCH) / 2;            // 2700
 const OX = -HALF, OZ = -HALF;
 const GX = (NB * PITCH) / CH, GZ = GX, GY = 64; // 1080 x 64 x 1080
@@ -135,6 +138,17 @@ function propPaintMaterial(material) {
       .replace('#include <color_fragment>', '#include <color_fragment>\ncityPaint = vPaint;');
   };
   return material;
+}
+
+function queueAttributeUpdate(attribute, start, count) {
+  // An off-camera batch can accumulate several changes before Three uploads it.
+  const queued = attribute.updateRanges[0];
+  if (queued) {
+    const end = Math.max(start + count, queued.start + queued.count);
+    queued.start = Math.min(start, queued.start);
+    queued.count = end - queued.start;
+  } else attribute.addUpdateRange(start, count);
+  attribute.needsUpdate = true;
 }
 
 // scorch decals painted on the ground in a 1024² canvas covering the whole city
@@ -282,7 +296,7 @@ export class City {
       }
       count++;
     }
-    // Props are not streamed; each mesh has one compact paint attribute per instance.
+    // Locate props by world position and update their district-local paint data.
     if (position.y - radius <= 11 && position.y + radius >= 0) {
       const reach = radius + 4;
       for (let gx = Math.floor((position.x - reach) / 10); gx <= Math.floor((position.x + reach) / 10); gx++)
@@ -298,9 +312,9 @@ export class City {
             const dy = Math.max(bottom - position.y, 0, position.y - top);
             if (dx * dx + dy * dy + dz * dz > rr) continue;
             let changed = false;
-            for (let part = 0; part < this.propPaintAttrs[prop.type].length; part++) {
+            for (let part = 0; part < prop.group.paintAttrs.length; part++) {
               if (prop.type === 0 && ((part === 0 && position.y - radius > 5) || (part === 1 && position.y + radius < 3))) continue;
-              const attr = this.propPaintAttrs[prop.type][part], o = prop.idx * 4;
+              const attr = prop.group.paintAttrs[part], o = prop.idx * 4;
               if (attr.array[o] === rgba[0] && attr.array[o + 1] === rgba[1] &&
                   attr.array[o + 2] === rgba[2] && attr.array[o + 3] === 255) continue;
               attr.array[o] = rgba[0]; attr.array[o + 1] = rgba[1];
@@ -333,7 +347,7 @@ export class City {
       part.paintAttribute.array.fill(0);
       part.paintDirty = [0, part.ids.length - 1];
     }
-    for (const group of this.propPaintAttrs) for (const attr of group) {
+    for (const group of this.propGroups) for (const attr of group.paintAttrs) {
       attr.array.fill(0); attr.clearUpdateRanges(); attr.needsUpdate = true;
     }
     paint.ctx.clearRect(0, 0, paint.canvas.width, paint.canvas.height);
@@ -503,30 +517,38 @@ export class City {
     this.paintData = new Uint8Array(n * 4);
     this.sunData = new Uint8Array(n * 3);
     this.sunBaked = new Uint8Array(n);
-    const districtCount = NB / DISTRICT_BLOCKS;
-    const districtCells = Array.from({ length: districtCount * districtCount }, () => []);
-    for (let i = 0; i < n; i++) {
-      const x = cells[i * 4], z = cells[i * 4 + 2];
-      const district = Math.floor(z * CH / (DISTRICT_BLOCKS * PITCH)) * districtCount +
-        Math.floor(x * CH / (DISTRICT_BLOCKS * PITCH));
-      districtCells[district].push(i);
+    this.districts = Array.from({ length: DISTRICT_COUNT ** 2 }, () => ({ batches: [] }));
+    this.meshes = [];
+    for (const district of this.districts) {
+      for (let batch = 0; batch < BATCHES_PER_SIDE ** 2; batch++) {
+        district.batches.push(this.meshes.length);
+        this.meshes.push({ district, ids: [], mesh: null, burnAttribute: null, paintAttribute: null,
+          bounds: new THREE.Box3(), matrixDirty: [Infinity, -1], burnDirty: [Infinity, -1], paintDirty: [Infinity, -1] });
+      }
     }
-    this.meshes = []; this.chunkPart = new Uint8Array(n); this.chunkLocal = new Uint32Array(n);
+    this.chunkPart = new Uint16Array(n); this.chunkLocal = new Uint32Array(n);
     this.burnAttr = { array: new Float32Array(n) };
     const m = new THREE.Matrix4(), c = new THREE.Color();
-    for (let part = 0; part < districtCells.length; part++) {
-      const ids = districtCells[part];
-      this.meshes.push({ ids, mesh: null, burnAttribute: null, paintAttribute: null,
-        matrixDirty: [Infinity, -1], burnDirty: [Infinity, -1], paintDirty: [Infinity, -1] });
-      for (let local = 0; local < ids.length; local++) {
-        const i = ids[local]; this.chunkPart[i] = part; this.chunkLocal[i] = local;
-        const x = cells[i * 4], y = cells[i * 4 + 1], z = cells[i * 4 + 2], b = cells[i * 4 + 3];
-        this.cx[i] = x; this.cy[i] = y; this.cz[i] = z; this.cb[i] = b; this.alive[i] = 1;
-        const L = this.lots[b], bld = this.buildings[b];
-        this.hp[i] = L.style === 0 ? 70 : 110;
-        this.grid.set(this.gi(x, y, z), i);
-        bld.cells.push(i); bld.alive++;
-      }
+    const corner = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const x = cells[i * 4], y = cells[i * 4 + 1], z = cells[i * 4 + 2], b = cells[i * 4 + 3];
+      const batchX = Math.floor(x * CH / BATCH_WIDTH), batchZ = Math.floor(z * CH / BATCH_WIDTH);
+      const district = this.districts[Math.floor(batchZ / BATCHES_PER_SIDE) * DISTRICT_COUNT +
+        Math.floor(batchX / BATCHES_PER_SIDE)];
+      const part = district.batches[(batchZ % BATCHES_PER_SIDE) * BATCHES_PER_SIDE + batchX % BATCHES_PER_SIDE];
+      const batch = this.meshes[part];
+      this.chunkPart[i] = part; this.chunkLocal[i] = batch.ids.length;
+      batch.ids.push(i);
+      batch.bounds.expandByPoint(corner.set(OX + x * CH, y * CH, OZ + z * CH));
+      batch.bounds.expandByPoint(corner.addScalar(CH));
+      this.cx[i] = x; this.cy[i] = y; this.cz[i] = z; this.cb[i] = b; this.alive[i] = 1;
+      const L = this.lots[b], bld = this.buildings[b];
+      this.hp[i] = L.style === 0 ? 70 : 110;
+      this.grid.set(this.gi(x, y, z), i);
+      bld.cells.push(i); bld.alive++;
+    }
+    for (const district of this.districts) {
+      district.batches = district.batches.filter((part) => this.meshes[part].ids.length);
     }
     // Reused flood-fill storage keeps repeated collapses allocation-free.
     this._collapseMarks = new Uint32Array(n);
@@ -591,7 +613,7 @@ export class City {
       }
     }
   }
-  _loadDistrict(part) {
+  _loadBatch(part) {
     const P = this.meshes[part], ids = P.ids;
     if (P.mesh || !ids.length) return;
     const geo = new THREE.BoxGeometry(CH, CH, CH);
@@ -632,18 +654,18 @@ export class City {
         this.sunPending.add(i);
       }
     }
-    mesh.computeBoundingSphere();
+    // Chunks only disappear or return to their original cells, so these bounds
+    // remain valid after destruction and reset without scanning the matrices.
+    mesh.boundingSphere = P.bounds.getBoundingSphere(new THREE.Sphere());
     this.scene.add(mesh);
     P.mesh = mesh; P.burnAttribute = burnAttribute; P.paintAttribute = paintAttribute;
     P.matrixDirty = [Infinity, -1]; P.burnDirty = [Infinity, -1]; P.paintDirty = [Infinity, -1];
-    if (P.proxy) P.proxy.visible = false;
   }
-  _unloadDistrict(part) {
+  _unloadBatch(part) {
     const P = this.meshes[part]; if (!P.mesh) return;
     this.scene.remove(P.mesh);
     P.mesh.geometry.dispose(); P.mesh.dispose();
     P.mesh = null; P.burnAttribute = null; P.paintAttribute = null;
-    if (P.proxy) { P.proxy.visible = true; P.proxyDirty = true; }
   }
   _refreshProxy(P) {
     if (!P.proxy || !P.proxyDirty) return;
@@ -658,15 +680,15 @@ export class City {
     P.proxyDirty = false;
   }
   _buildDistrictProxies() {
-    const groups = this.meshes.map(() => []), count = NB / DISTRICT_BLOCKS;
+    const groups = this.districts.map(() => []);
     this.lots.forEach((L, b) => {
-      const col = Math.floor((L.x - OX) / (DISTRICT_BLOCKS * PITCH));
-      const row = Math.floor((L.z - OZ) / (DISTRICT_BLOCKS * PITCH));
+      const col = Math.floor((L.x - OX) / DISTRICT_WIDTH);
+      const row = Math.floor((L.z - OZ) / DISTRICT_WIDTH);
       const boxes = L.landmark ? landmarkProxyBoxes(L, CH) : [{
         x: L.x + L.w / 2, y: L.h * CH / 2, z: L.z + L.d / 2,
         w: L.w, h: L.h * CH, d: L.d,
       }];
-      for (const box of boxes) groups[row * count + col].push({ b, box });
+      for (const box of boxes) groups[row * DISTRICT_COUNT + col].push({ b, box });
     });
     const proxyMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const m = new THREE.Matrix4(), c = new THREE.Color();
@@ -679,24 +701,34 @@ export class City {
         mesh.setMatrixAt(local, m);
         c.setRGB(B.color[0], B.color[1], B.color[2], THREE.SRGBColorSpace); mesh.setColorAt(local, c);
       });
-      this.scene.add(mesh); this.meshes[part].proxy = mesh; this.meshes[part].proxyIds = ids;
+      this.scene.add(mesh); this.districts[part].proxy = mesh; this.districts[part].proxyIds = ids;
     });
   }
   _streamDistricts(focus) {
     if (!focus) return;
-    const count = NB / DISTRICT_BLOCKS, width = DISTRICT_BLOCKS * PITCH;
-    const stream = { origin: OX, width, count, margin: PITCH };
+    const stream = { origin: OX, width: DISTRICT_WIDTH, count: DISTRICT_COUNT, margin: PITCH };
     const col = this.streamCol = streamingDistrictIndex(focus.x, this.streamCol, stream);
     const row = this.streamRow = streamingDistrictIndex(focus.z, this.streamRow, stream);
-    let next = -1, nearest = Infinity;
-    for (let p = 0; p < this.meshes.length; p++) {
-      const dx = Math.abs(p % count - col), dz = Math.abs(Math.floor(p / count) - row);
-      if (dx > 1 || dz > 1) { this._unloadDistrict(p); this._refreshProxy(this.meshes[p]); continue; }
-      if (!this.meshes[p].mesh && this.meshes[p].ids.length && dx + dz < nearest) {
-        nearest = dx + dz; next = p;
+    let next, nearest = Infinity;
+    for (let p = 0; p < this.districts.length; p++) {
+      const district = this.districts[p];
+      const dx = Math.abs(p % DISTRICT_COUNT - col), dz = Math.abs(Math.floor(p / DISTRICT_COUNT) - row);
+      if (dx > 1 || dz > 1) {
+        if (district.loaded) {
+          for (const part of district.batches) this._unloadBatch(part);
+          district.loaded = false;
+          if (district.proxy) district.proxy.visible = true;
+        }
+        this._refreshProxy(district);
+      } else if (!district.loaded && district.batches.length && dx + dz < nearest) {
+        nearest = dx + dz; next = district;
       }
     }
-    if (next >= 0) this._loadDistrict(next);
+    if (next) {
+      for (const part of next.batches) this._loadBatch(part);
+      next.loaded = true;
+      if (next.proxy) next.proxy.visible = false;
+    }
   }
   chunkAt(px, py, pz) {
     const x = Math.floor((px - OX) / CH), y = Math.floor(py / CH), z = Math.floor((pz - OZ) / CH);
@@ -709,6 +741,7 @@ export class City {
   _buildProps() {
     const R = rng(4242);
     this.props = []; this.propHash = new Map();
+    this.propGroups = [];
     const trees = [], lamps = [], cars = [];
     for (const B of this.blocks) {
       const outer = Math.max(Math.abs(B.x0 + BLOCK / 2), Math.abs(B.z0 + BLOCK / 2)) > CORE_HALF;
@@ -743,31 +776,31 @@ export class City {
       for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i); const n = 1 + 0.22 * Math.sin(v.x * 2.1 + v.y * 1.3) * Math.cos(v.z * 1.7 - v.y); v.multiplyScalar(n); v.y *= 0.8; a.setXYZ(i, v.x, v.y + 5.4, v.z); }
       g.computeVertexNormals(); return g;
     })();
-    const trunk = new THREE.InstancedMesh(trunkG, propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0x3b2a20 })), trees.length);
-    const crown = new THREE.InstancedMesh(crownG, propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0xffffff })), trees.length);
+    const trunkMat = propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0x3b2a20 }));
+    const crownMat = propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0xffffff }));
     const leaf = [[0.78, 0.28, 0.22], [0.87, 0.42, 0.25], [0.92, 0.62, 0.32], [0.68, 0.30, 0.30], [0.88, 0.51, 0.30]];
-    trees.forEach(([x, z, sc], i) => {
+    this._groupProps(trees, [[trunkG, trunkMat], [crownG, crownMat]], ([x, z, sc], group, i) => {
+      const [trunk, crown] = group.meshes;
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), R() * 6.28); s.setScalar(sc * 1.2);
       m.compose(p.set(x, 0.3, z), q, s); trunk.setMatrixAt(i, m); crown.setMatrixAt(i, m);
       const L = leaf[(R() * leaf.length) | 0]; crown.setColorAt(i, c.setRGB(L[0], L[1], L[2], THREE.SRGBColorSpace));
-      this._addProp(0, i, x, z, 0.3 + 2.5 * sc);
-    });
-    this.scene.add(trunk, crown);
+      this._addProp(0, group, i, x, z, 0.3 + 2.5 * sc);
+    }, 1.4 * 1.2);
 
     // street lamps
     const poleG = new THREE.CylinderGeometry(0.1, 0.14, 8, 6).translate(0, 4, 0);
     const headG = new THREE.BoxGeometry(0.5, 0.25, 1.4).translate(0, 8, 0.5);
-    const pole = new THREE.InstancedMesh(poleG, propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0x222428 })), lamps.length);
-    const head = new THREE.InstancedMesh(headG, propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0xffc27a })), lamps.length);
-    lamps.forEach(([x, z], i) => {
+    const poleMat = propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0x222428 }));
+    const headMat = propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0xffc27a }));
+    this._groupProps(lamps, [[poleG, poleMat], [headG, headMat]], ([x, z], group, i) => {
+      const [pole, head] = group.meshes;
       // point the lamp head at the road
       const bx = ((x - OX) % PITCH + PITCH) % PITCH, bz = ((z - OZ) % PITCH + PITCH) % PITCH;
       const ang = bx < ROAD / 2 + 4 ? -Math.PI / 2 : bx > PITCH - ROAD / 2 - 4 ? Math.PI / 2 : bz < ROAD / 2 + 4 ? Math.PI : 0;
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ang); m.compose(p.set(x, 0.3, z), q, s.setScalar(1));
       pole.setMatrixAt(i, m); head.setMatrixAt(i, m);
-      this._addProp(1, i, x, z, 1);
+      this._addProp(1, group, i, x, z, 1);
     });
-    this.scene.add(pole, head);
 
     // cars
     const carG = (() => {
@@ -779,32 +812,90 @@ export class City {
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
       return g;
     })();
-    const car = new THREE.InstancedMesh(carG, propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0xffffff })), cars.length);
+    const carMat = propPaintMaterial(new THREE.MeshBasicMaterial({ color: 0xffffff }));
     const carCols = [[0.75, 0.26, 0.23], [0.88, 0.85, 0.76], [0.18, 0.27, 0.3], [0.25, 0.49, 0.55], [0.58, 0.65, 0.63], [0.91, 0.68, 0.31]];
-    cars.forEach(([x, z, a, r], i) => {
+    this._groupProps(cars, [[carG, carMat]], ([x, z, a, r], group, i) => {
+      const [car] = group.meshes;
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), a); m.compose(p.set(x, 0, z), q, s.setScalar(1)); car.setMatrixAt(i, m);
       const C = carCols[(r * carCols.length) | 0]; car.setColorAt(i, c.setRGB(C[0], C[1], C[2], THREE.SRGBColorSpace));
-      this._addProp(2, i, x, z, 1);
+      this._addProp(2, group, i, x, z, 1, C);
     });
-    this.scene.add(car);
-    this.propMeshes = [[trunk, crown], [pole, head], [car]];
-    this.propPaintAttrs = this.propMeshes.map(group => group.map(mesh => {
-      const attr = new THREE.InstancedBufferAttribute(new Uint8Array(mesh.count * 4), 4, true);
-      attr.setUsage(THREE.DynamicDrawUsage);
-      mesh.geometry.setAttribute('aPaint', attr);
-      return attr;
-    }));
-    this.propInitialMatrices = this.propMeshes.map(group => group.map(mesh => new Float32Array(mesh.instanceMatrix.array)));
-    this.carCols = cars.map(([, , , r]) => carCols[(r * carCols.length) | 0]);
   }
-  _addProp(type, idx, x, z, h) {
-    const id = this.props.length; this.props.push({ type, idx, x, z, h, alive: true });
+
+  _groupProps(entries, parts, place, maxScale = 1) {
+    const diameter = Math.max(...parts.map(([geometry]) => {
+      geometry.computeBoundingSphere();
+      return 2 * geometry.boundingSphere.radius * maxScale;
+    }));
+    const districts = new Map();
+    const batches = entries.map(([x, z]) => {
+      const col = clamp(Math.floor((x - OX) / DISTRICT_WIDTH), 0, DISTRICT_COUNT - 1);
+      const row = clamp(Math.floor((z - OZ) / DISTRICT_WIDTH), 0, DISTRICT_COUNT - 1);
+      const district = row * DISTRICT_COUNT + col;
+      if (!districts.has(district)) districts.set(district, { count: 0, next: 0, paintAttrs: [] });
+      const group = districts.get(district);
+      group.count++;
+      return group;
+    });
+    for (const group of districts.values()) {
+      group.meshes = parts.map(([source, material]) => {
+        const geometry = source.clone();
+        const paintAttr = new THREE.InstancedBufferAttribute(new Uint8Array(group.count * 4), 4, true);
+        paintAttr.setUsage(THREE.DynamicDrawUsage);
+        geometry.setAttribute('aPaint', paintAttr);
+        group.paintAttrs.push(paintAttr);
+        const mesh = new THREE.InstancedMesh(geometry, material, group.count);
+        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        return mesh;
+      });
+    }
+    // Keep the generation order, including the random tree rotations and colors.
+    entries.forEach((entry, i) => {
+      const group = batches[i];
+      place(entry, group, group.next++);
+    });
+    for (const group of districts.values()) {
+      group.bounds = new THREE.Box3();
+      group.diameter = diameter;
+      group.initialMatrices = group.meshes.map(mesh => {
+        mesh.computeBoundingBox();
+        mesh.computeBoundingSphere();
+        group.bounds.union(mesh.boundingBox);
+        this.scene.add(mesh);
+        return new Float32Array(mesh.instanceMatrix.array);
+      });
+      this.propGroups.push(group);
+    }
+  }
+
+  updatePropVisibility(camera, drawingBufferHeight) {
+    camera.getWorldDirection(_propViewDirection);
+    const { x, y, z } = _propViewDirection;
+    const cameraDepth = camera.getWorldPosition(_propViewPosition).dot(_propViewDirection);
+    const projectionScale = camera.projectionMatrix.elements[5] * drawingBufferHeight * 0.5;
+    const density = this.scene.fog?.isFogExp2 ? this.scene.fog.density : 0;
+    // Beyond this depth, less than one 8-bit step of the prop's color remains.
+    const fogLimit = density > 0 ? Math.sqrt(Math.log(255)) / density : Infinity;
+    for (const { bounds, diameter, meshes } of this.propGroups) {
+      // Test the nearest corner in view depth so whole batches stay visible
+      // until even their biggest detail covers less than 1.25 drawing pixels.
+      const depth = (x >= 0 ? bounds.min.x : bounds.max.x) * x
+        + (y >= 0 ? bounds.min.y : bounds.max.y) * y
+        + (z >= 0 ? bounds.min.z : bounds.max.z) * z - cameraDepth;
+      const detailLimit = projectionScale > 0 ? diameter * projectionScale / 1.25 : Infinity;
+      const visible = depth <= Math.max(250, Math.min(fogLimit, detailLimit));
+      for (const mesh of meshes) mesh.visible = visible;
+    }
+  }
+
+  _addProp(type, group, idx, x, z, h, color) {
+    const id = this.props.length; this.props.push({ type, group, idx, x, z, h, color, alive: true });
     const k = `${Math.floor(x / 10)},${Math.floor(z / 10)}`;
     (this.propHash.get(k) || this.propHash.set(k, []).get(k)).push(id);
   }
   destroyProps(px, py, pz, r) {
     if (py - r > 12) return;
-    const zero = new THREE.Matrix4().makeScale(0, 0, 0), v = new THREE.Vector3();
+    const v = new THREE.Vector3();
     for (let gx = Math.floor((px - r) / 10); gx <= Math.floor((px + r) / 10); gx++)
       for (let gz = Math.floor((pz - r) / 10); gz <= Math.floor((pz + r) / 10); gz++) {
         const L = this.propHash.get(`${gx},${gz}`); if (!L) continue;
@@ -812,10 +903,14 @@ export class City {
           const P = this.props[id]; if (!P.alive) continue;
           if ((P.x - px) ** 2 + (P.h - py) ** 2 + (P.z - pz) ** 2 > r * r) continue;
           P.alive = false;
-          for (const mesh of this.propMeshes[P.type]) { mesh.setMatrixAt(P.idx, zero); mesh.instanceMatrix.needsUpdate = true; }
+          for (const mesh of P.group.meshes) {
+            mesh.setMatrixAt(P.idx, ZERO);
+            mesh.instanceMatrix.addUpdateRange(P.idx * 16, 16);
+            mesh.instanceMatrix.needsUpdate = true;
+          }
           v.set(P.x - px, 2, P.z - pz).normalize();
           if (P.type === 2) { // car: burst into burning wreckage
-            const C = this.carCols[P.idx];
+            const C = P.color;
             for (let k = 0; k < 4; k++) this.spawnDebris(P.x, 1, P.z, v.x * 18 + (Math.random() - .5) * 10, 10 + Math.random() * 14, v.z * 18 + (Math.random() - .5) * 10, 0.7 + Math.random() * 0.7, C[0] * 0.6, C[1] * 0.6, C[2] * 0.6);
             this.fx && this.fx.burnAt(new THREE.Vector3(P.x, 1, P.z), 6);
           } else if (P.type === 0) {
@@ -827,7 +922,7 @@ export class City {
 
   // ----------------------------------------------------------------------- destruction
   _markM(i) {
-    const part = this.meshes[this.chunkPart[i]]; part.proxyDirty = true;
+    const part = this.meshes[this.chunkPart[i]]; part.district.proxyDirty = true;
     if (!part.mesh) return;
     const d = part.matrixDirty, local = this.chunkLocal[i];
     if (local < d[0]) d[0] = local; if (local > d[1]) d[1] = local;
@@ -1039,30 +1134,30 @@ export class City {
 
     const matrix = new THREE.Matrix4();
     for (const part of this.meshes) {
-      part.proxyDirty = true;
       if (part.mesh) {
         part.ids.forEach((i, local) => {
           matrix.makeTranslation(OX + (this.cx[i] + 0.5) * CH, (this.cy[i] + 0.5) * CH, OZ + (this.cz[i] + 0.5) * CH);
           part.mesh.setMatrixAt(local, matrix);
         });
-        part.mesh.instanceMatrix.clearUpdateRanges();
-        part.mesh.instanceMatrix.needsUpdate = true;
+        queueAttributeUpdate(part.mesh.instanceMatrix, 0, part.mesh.instanceMatrix.array.length);
         part.burnAttribute.array.fill(0);
-        part.burnAttribute.clearUpdateRanges();
-        part.burnAttribute.needsUpdate = true;
+        queueAttributeUpdate(part.burnAttribute, 0, part.burnAttribute.array.length);
         const sun = part.mesh.geometry.getAttribute('aSun');
-        sun.array.fill(255); sun.clearUpdateRanges(); sun.needsUpdate = true;
+        sun.array.fill(255);
+        queueAttributeUpdate(sun, 0, sun.array.length);
         for (const i of part.ids) this.sunPending.add(i);
       }
       part.matrixDirty = [Infinity, -1]; part.burnDirty = [Infinity, -1];
-      this._refreshProxy(part);
+    }
+    for (const district of this.districts) {
+      district.proxyDirty = true;
+      this._refreshProxy(district);
     }
     this.props.forEach(prop => { prop.alive = true; });
-    this.propMeshes.forEach((group, type) => group.forEach((mesh, index) => {
-      mesh.instanceMatrix.array.set(this.propInitialMatrices[type][index]);
+    this.propGroups.forEach(group => group.meshes.forEach((mesh, index) => {
+      mesh.instanceMatrix.array.set(group.initialMatrices[index]);
       mesh.instanceMatrix.clearUpdateRanges();
       mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingSphere();
     }));
     this.dLive = this.dReplace = 0;
     this.dColorDirty[0] = Infinity; this.dColorDirty[1] = -1;
@@ -1259,6 +1354,7 @@ export class City {
       let baked = 0;
       const deadline = performance.now() + 2;
       for (const i of this.sunPending) {
+        if (performance.now() >= deadline) break;
         this.sunPending.delete(i);
         if (!this.alive[i]) continue;
         const part = this.meshes[this.chunkPart[i]];
@@ -1269,8 +1365,8 @@ export class City {
         attr.array[target] = this.sunData[source];
         attr.array[target + 1] = this.sunData[source + 1];
         attr.array[target + 2] = this.sunData[source + 2];
-        attr.addUpdateRange(target, 3); attr.needsUpdate = true;
-        if (++baked >= 96 || performance.now() >= deadline) break;
+        queueAttributeUpdate(attr, target, 3);
+        if (++baked >= 96) break;
       }
     }
     this._collapseT += dt;
@@ -1279,18 +1375,15 @@ export class City {
     for (const part of this.meshes) {
       const m = part.matrixDirty, b = part.burnDirty, p = part.paintDirty;
       if (part.mesh && m[1] >= 0) {
-        const a = part.mesh.instanceMatrix; a.clearUpdateRanges();
-        a.addUpdateRange(m[0] * 16, (m[1] - m[0] + 1) * 16); a.needsUpdate = true;
+        queueAttributeUpdate(part.mesh.instanceMatrix, m[0] * 16, (m[1] - m[0] + 1) * 16);
         m[0] = Infinity; m[1] = -1;
       }
       if (part.mesh && b[1] >= 0) {
-        const a = part.burnAttribute; a.clearUpdateRanges();
-        a.addUpdateRange(b[0], b[1] - b[0] + 1); a.needsUpdate = true;
+        queueAttributeUpdate(part.burnAttribute, b[0], b[1] - b[0] + 1);
         b[0] = Infinity; b[1] = -1;
       }
       if (part.mesh && p[1] >= 0) {
-        const a = part.paintAttribute; a.clearUpdateRanges();
-        a.addUpdateRange(p[0] * 4, (p[1] - p[0] + 1) * 4); a.needsUpdate = true;
+        queueAttributeUpdate(part.paintAttribute, p[0] * 4, (p[1] - p[0] + 1) * 4);
         p[0] = Infinity; p[1] = -1;
       }
     }
@@ -1302,6 +1395,7 @@ export class City {
 }
 
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+const _propViewDirection = new THREE.Vector3(), _propViewPosition = new THREE.Vector3();
 const SUN_NEIGHBOURS = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _e = new THREE.Euler(), _c = new THREE.Color(), _v = new THREE.Vector3(), _paintColor = new THREE.Color(), _sunOrigin = new THREE.Vector3();
 const rnd = (a) => (Math.random() - 0.5) * 2 * a;

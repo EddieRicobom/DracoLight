@@ -3,6 +3,36 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { PaintTornado, SpiralDetector } from '../src/tornado.js';
 
+test('formation progress follows the turn, clears when straightened and completes on emission', () => {
+  const detector = new SpiralDetector();
+  const dt = 1 / 60, radius = 80;
+  function updateCircle(angle) {
+    return detector.update(dt, { x: radius * Math.cos(angle), y: 100, z: radius * Math.sin(angle) },
+      { x: -Math.sin(angle), z: Math.cos(angle) }, radius * 1.2);
+  }
+
+  assert.equal(detector.formationProgress, 0);
+  for (let i = 0; i <= 90; i++) assert.equal(updateCircle(i * 0.02), null);
+  assert.ok(detector.formationProgress > 0.3 && detector.formationProgress < 0.35);
+  for (let i = 0; i < 20; i++) {
+    const distance = (i + 1) * radius * 0.02;
+    detector.update(dt, { x: radius * Math.cos(1.8) - distance * Math.sin(1.8),
+      z: radius * Math.sin(1.8) + distance * Math.cos(1.8) },
+    { x: -Math.sin(1.8), z: Math.cos(1.8) }, radius * 1.2);
+  }
+  assert.equal(detector.formationProgress, 0);
+
+  detector.reset();
+  let spiral;
+  for (let i = 0; i < 320 && !spiral; i++) {
+    assert.ok(detector.formationProgress < 1);
+    spiral = updateCircle(-i * 0.02);
+  }
+  assert.ok(spiral);
+  assert.equal(detector.formationProgress, 0);
+  assert.ok(detector.emittedAt > 0);
+});
+
 test('spiral makes one growing tornado, straight flight does not, and clear removes it', () => {
   const scene = new THREE.Scene();
   const effect = new PaintTornado(scene);

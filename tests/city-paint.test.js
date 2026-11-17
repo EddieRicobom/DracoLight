@@ -23,7 +23,7 @@ test('painting reports only changed chunks and ground contacts', () => {
   city.chunkLocal = new Uint32Array([0]);
   city.propHash = new Map();
   city.props = [];
-  city.propPaintAttrs = [[], [], []];
+  city.propGroups = [];
   city._buildPaint();
   city.grid.set(city.gi(540, 4, 540), 0); // world origin, 20 m above ground
 
@@ -43,7 +43,7 @@ test('ground texture batches paint uploads and clear uploads immediately', () =>
   city.meshes = [];
   city.propHash = new Map();
   city.props = [];
-  city.propPaintAttrs = [[], [], []];
+  city.propGroups = [];
   city._buildPaint();
   city._streamDistricts = () => {};
   city._updateDebris = () => {};
@@ -60,7 +60,7 @@ test('ground texture batches paint uploads and clear uploads immediately', () =>
   assert.equal(city.paintTexture.version, version + 2);
   const propPaint = new THREE.InstancedBufferAttribute(new Uint8Array([255, 0, 0, 255]), 4, true);
   propPaint.addUpdateRange(0, 4);
-  city.propPaintAttrs[0].push(propPaint);
+  city.propGroups.push({ paintAttrs: [propPaint] });
   city.clearPaint();
   assert.equal(city.paintTexture.version, version + 3);
   assert.deepEqual([...propPaint.array], [0, 0, 0, 0]);

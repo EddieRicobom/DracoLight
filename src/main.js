@@ -3,7 +3,9 @@ import { GameAudio } from './audio.js';
 import { Dragon, PALETTES } from './dragon.js';
 import { Boykisser } from './boykisser.js';
 import { createCoop } from './coop.js';
-import { City, HALF } from './city.js';
+import { City, CH, HALF } from './city.js';
+import { createCityRelics } from './relics.js';
+import { createFlightCircuit } from './flight-circuit.js';
 import { createUrbanDetails } from './urban.js';
 import { createPolyProps } from './polyprops.js';
 import { FX } from './fx.js';
@@ -11,6 +13,7 @@ import { InkTrail } from './ink.js';
 import { createTouchControls } from './touch.js';
 import { advanceDiveSpeed, advanceDiveImpact } from './dive.js';
 import { PaintTornado } from './tornado.js';
+import { createTornadoHud } from './tornado-hud.js';
 import { PaintMeteor } from './meteor.js';
 import { DestructionChain } from './destruction-chain.js';
 import { makeMonochrome } from './monochrome.js';
@@ -86,6 +89,7 @@ for (const item of scene.children) makeMonochrome(item);
 const inkLeft = new InkTrail(scene, camera, -9);
 const inkRight = new InkTrail(scene, camera, 9);
 const tornado = new PaintTornado(scene);
+const updateTornadoHud = createTornadoHud(hud, tornado.detector);
 const paintColor = $('paintColor');
 const paintPresets = document.querySelectorAll('input[name="paintPreset"]');
 function choosePaint(color) {
@@ -128,6 +132,13 @@ tornado.onPaint = paintWorld;
 const urban = createUrbanDetails(scene, city);
 const polyProps = createPolyProps(scene, city);
 for (const item of scene.children) if (!beforeCity.has(item)) makeMonochrome(item);
+const relics = createCityRelics(scene, city, CH, {
+  count: $('relicCount'), hint: $('relicHint'), bearing: $('relicBearing'), notice: $('relicNotice'),
+});
+const flightCircuit = createFlightCircuit(scene, {
+  button: $('flightButton'), readout: $('flightReadout'), bearing: $('flightBearing'),
+  notice: $('flightNotice'), record: $('flightRecord'),
+});
 polyProps.ready.then(() => {
   for (const item of scene.children) if (item.name.startsWith('Poly Haven ')) makeMonochrome(item);
 });
@@ -193,6 +204,7 @@ function setPlayerMode(mode) {
     speed = FLIGHT.cruise;
   }
   playerMode = mode;
+  flightCircuit.setAvailable(mode === 'dragon');
   destructionChain.reset(city.score);
   switchButton.textContent = mode === 'dragon' ? 'Jogar como personagem' : 'Jogar como dragão';
   $('touchPaint').style.display = mode === 'dragon' ? '' : 'none';
@@ -447,6 +459,7 @@ function updateCamera(dt) {
 }
 
 function updateHud(dt) {
+  updateTornadoHud(dt, playerMode === 'dragon');
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
   destructionChain.update(city.score, elapsed, playerMode === 'dragon' && coop.role !== 'guest');
@@ -716,6 +729,8 @@ function frame(now) {
     }
     clouds.update(dt, cloudDragonPosition, !!cloudDragonPosition);
     city.update(dt, activePosition());
+    relics.update(old, activePosition(), yaw, elapsed, playerMode === 'human' ? human.height / 2 : 0);
+    if (playerMode === 'dragon') flightCircuit.update(old, player.pos, yaw, elapsed, dt);
     urban.update(dt);
     polyProps.update(dt);
     fx.update(dt, city);
@@ -737,6 +752,7 @@ function frame(now) {
   } else halftoneScanTime = Infinity;
   shadowElapsed += Math.min(rawDt, 0.25);
   if (shadowElapsed >= 0.08) { renderer.shadowMap.needsUpdate = true; shadowElapsed = 0; }
+  city.updatePropVisibility(camera, canvas.height);
   composer.render();
 }
 requestAnimationFrame(frame);
