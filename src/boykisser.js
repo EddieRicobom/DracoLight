@@ -201,6 +201,7 @@ export class Boykisser {
   }
 
   _animate(dt, speed) {
+    if (this.model && !this.model.visible) return;
     const active = this.state === 'run' || this.state === 'walk' || this.state === 'climb';
     this.phase += dt * (this.state === 'climb' ? 9 : 5 + speed * 0.45);
     const bob = active ? Math.abs(Math.sin(this.phase)) * 0.08 : Math.sin(this.phase * 0.3) * 0.025;
@@ -219,39 +220,53 @@ export class Boykisser {
    * +forward follows local +Z; +strafe moves to camera/model right (local -X).
    * Returns the current movement state.
    */
-  update(dt, { forward = 0, strafe = 0, sprint = false, jump = false, yaw = this.yaw } = {}) {
+  update(dt, {
+    forward = 0, strafe = 0, sprint = false, jump = false, yaw = this.yaw, movementYaw = yaw,
+    speedScale = 1, climbScale = 1, gravityScale = 1, lift, fallLimit = Infinity,
+    allowClimb = true, slide = false, sweep = false,
+  } = {}) {
     dt = clamp(Number.isFinite(dt) ? dt : 0, 0, 0.05);
     this.yaw = yaw;
     const magnitude = Math.hypot(forward, strafe);
     const inputLength = Math.min(1, magnitude);
-    const speed = (sprint ? this.runSpeed : this.walkSpeed) * inputLength;
+    const speed = (sprint ? this.runSpeed : this.walkSpeed) * inputLength * speedScale;
     this._move.set(
-      Math.sin(yaw) * forward - Math.cos(yaw) * strafe,
+      Math.sin(movementYaw) * forward - Math.cos(movementYaw) * strafe,
       0,
-      Math.cos(yaw) * forward + Math.sin(yaw) * strafe
+      Math.cos(movementYaw) * forward + Math.sin(movementYaw) * strafe
     );
     if (magnitude > 1) this._move.divideScalar(magnitude);
     this._move.multiplyScalar(speed * dt);
     const x = clamp(this.position.x + this._move.x, -HALF + this.radius, HALF - this.radius);
     const z = clamp(this.position.z + this._move.z, -HALF + this.radius, HALF - this.radius);
-    const blocked = this._occupied(x, this.position.y, z);
-    const pushingWall = blocked && inputLength > 0.15 && forward > 0.1;
+    const previousY = this.position.y;
+    const blocked = this._blockedPath(x, z, sweep);
+    const pushingWall = allowClimb && lift === undefined && blocked && inputLength > 0.15 && forward > 0.1;
     this.climbing = pushingWall;
 
     if (this.climbing) {
-      this.velocity.y = this.climbSpeed;
-      const nextY = this.position.y + this.climbSpeed * dt;
+      this.velocity.y = this.climbSpeed * climbScale;
+      const nextY = this.position.y + this.velocity.y * dt;
       if (!this._occupied(this.position.x, nextY, this.position.z)) this.position.y = nextY;
     } else {
-      if (this.grounded && jump) { this.velocity.y = this.jumpSpeed; this.grounded = false; }
-      this.velocity.y -= this.gravity * dt;
-      this.position.y = Math.max(0, this.position.y + this.velocity.y * dt);
-      if (!blocked) { this.position.x = x; this.position.z = z; }
+      if (lift !== undefined) { this.velocity.y = lift; this.grounded = false; }
+      else if (this.grounded && jump) { this.velocity.y = this.jumpSpeed; this.grounded = false; }
+      this.velocity.y = Math.max(-fallLimit, this.velocity.y - this.gravity * gravityScale * dt);
+      const nextY = Math.max(0, previousY + this.velocity.y * dt);
+      if (sweep && nextY > previousY && this._occupied(this.position.x, nextY, this.position.z)) this.velocity.y = 0;
+      else this.position.y = nextY;
+      const raisedIntoWall = sweep && this.position.y > previousY && this._blockedPath(x, z, true);
+      if (!blocked && !raisedIntoWall) { this.position.x = x; this.position.z = z; }
+      else if (slide) {
+        if (!this._blockedPath(x, this.position.z, sweep)) this.position.x = x;
+        else if (!this._blockedPath(this.position.x, z, sweep)) this.position.z = z;
+      }
     }
 
     // Sweep down from just above the feet, so roofs and the road support the player.
     const snap = this.climbing ? 0.1 : Math.max(0.15, -this.velocity.y * dt + 0.15);
-    const ground = this.findGround(this.position.x, this.position.z, this.position.y + 0.15);
+    const sweepTop = sweep ? Math.max(previousY, this.position.y) : this.position.y;
+    const ground = this.findGround(this.position.x, this.position.z, sweepTop + 0.15);
     if (!this.climbing && this.velocity.y <= 0 && this.position.y - ground <= snap) {
       this.position.y = ground;
       this.velocity.y = 0;
@@ -266,6 +281,17 @@ export class Boykisser {
     this.root.rotation.y = yaw;
     this._animate(dt, speed);
     return this.state;
+  }
+
+  _blockedPath(x, z, sweep) {
+    if (!sweep) return this._occupied(x, this.position.y, z);
+    const { x: startX, y, z: startZ } = this.position;
+    const dx = x - startX, dz = z - startZ;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / Math.max(0.5, this.radius)));
+    for (let i = 1; i <= steps; i++) {
+      if (this._occupied(startX + dx * i / steps, y, startZ + dz * i / steps)) return true;
+    }
+    return false;
   }
 
   dispose() {

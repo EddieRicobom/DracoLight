@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { GameAudio } from './audio.js';
 import { Dragon, PALETTES } from './dragon.js';
 import { Boykisser } from './boykisser.js';
+import { ZODIAC_ANIMALS, createZodiacAvatar } from './zodiac.js';
+import { ZodiacAbilities, ZODIAC_ABILITIES, ZODIAC_IMPACTS } from './zodiac-abilities.js';
+import { readCoopState, readCoopZodiacImpact } from './coop-state.js';
 import { createCoop } from './coop.js';
 import { City, CH, HALF } from './city.js';
 import { createCityRelics } from './relics.js';
@@ -134,9 +137,9 @@ const paintWorld = (position, radius, color) => {
     recordWorld({ kind: 'paint', p: position.toArray(), r: radius, color: new THREE.Color(color).getHex() });
 };
 const destroyWorld = city.destroySphere.bind(city);
-city.destroySphere = (position, radius, power, maxN) => {
+city.destroySphere = (position, radius, power, maxN, forceSync = false) => {
   const count = destroyWorld(position, radius, power, maxN);
-  if (count > 0) recordWorld({ kind: 'destroy', p: position.toArray(), r: radius, power, maxN });
+  if (count > 0 || forceSync) recordWorld({ kind: 'destroy', p: position.toArray(), r: radius, power, maxN });
   return count;
 };
 inkLeft.onPaint = paintWorld;
@@ -196,20 +199,76 @@ const FLIGHT = Object.freeze({
 const human = new Boykisser(scene, city, { position: new THREE.Vector3(0, 0, 115), yaw: Math.PI });
 human.root.visible = false;
 let playerMode = 'dragon';
+let activeSpecies = 'boykisser', zodiacAvatar = null;
 let humanReady = false;
-const humanLoading = human.load().then(() => { humanReady = true; }).catch((error) => {
+const humanLoading = human.load().then(() => { humanReady = true; human.model.visible = activeSpecies === 'boykisser'; }).catch((error) => {
   console.error('Não foi possível carregar o personagem:', error);
   $('status').textContent = 'Não foi possível carregar o personagem.';
 });
 const switchButton = $('switchCharacter');
+const characterSelect = $('characterSelect');
+for (const [id, label] of [['dragon', 'Dragão'], ['boykisser', 'Personagem original'], ...ZODIAC_ANIMALS.map(({ id, label }) => [id, label])]) {
+  const option = document.createElement('option'); option.value = id; option.textContent = label; characterSelect.append(option);
+}
+const zodiacAbilities = new ZodiacAbilities({ city, onEffect: handleZodiacEffect });
+function prepareZodiac(root) {
+  const materials = new Set();
+  root.traverse((object) => {
+    if (object.material) for (const material of [object.material].flat()) materials.add(material);
+  });
+  // Keep animal silhouettes legible against the white paper city.
+  for (const material of materials) material.color?.multiplyScalar(0.58);
+  makeMonochrome(root);
+  for (const material of materials) addInkOutline(material);
+}
+function handleZodiacEffect({ id, type, position, direction }) {
+  if (type === 'start') fx.dust(position, 1.4, 1);
+  if (type === 'trail') fx.dust(position, 0.65, 1);
+  if (type !== 'impact') return;
+  fx.bigDust(position, 8);
+  const impact = ZODIAC_IMPACTS[id];
+  if (!impact) return;
+  if (coop.role === 'guest') {
+    coop.send({ type: 'zodiac-impact', species: id, p: position.toArray() });
+  } else {
+    city.destroySphere(position, impact.radius, impact.power, impact.maxChunks, true);
+  }
+}
+function setSpecies(id) {
+  if (id !== 'boykisser' && !ZODIAC_ABILITIES[id]) return false;
+  if (id === 'boykisser' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return false; }
+  if (zodiacAvatar) { human.root.remove(zodiacAvatar.root); zodiacAvatar.dispose(); zodiacAvatar = null; }
+  activeSpecies = id;
+  zodiacAbilities.select(id);
+  if (human.model) human.model.visible = id === 'boykisser';
+  if (id !== 'boykisser') {
+    zodiacAvatar = createZodiacAvatar(id, { height: human.height });
+    prepareZodiac(zodiacAvatar.root);
+    human.root.add(zodiacAvatar.root);
+  }
+  return true;
+}
+function refreshCharacterUI() {
+  characterSelect.value = playerMode === 'dragon' ? 'dragon' : activeSpecies;
+  $('characterDescription').textContent = playerMode === 'dragon'
+    ? 'Voo livre, tinta, tornados e meteoros.'
+    : activeSpecies === 'boykisser' ? 'Corre rápido e escala prédios.' : ZODIAC_ABILITIES[activeSpecies].description;
+  const action = $('touchPaint');
+  action.style.display = playerMode === 'dragon' || activeSpecies !== 'boykisser' ? '' : 'none';
+  action.textContent = playerMode === 'dragon' ? 'Tinta' : 'Habilidade';
+  action.setAttribute('aria-label', playerMode === 'dragon' ? 'Disparar bola de tinta' : 'Usar habilidade');
+}
 function setPlayerMode(mode) {
   if (mode === playerMode) return;
-  if (mode === 'human' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return; }
+  if (mode === 'dragon' && coop.role === 'guest') return;
+  if (mode === 'human' && activeSpecies === 'boykisser' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return; }
   if (mode === 'human') {
+    zodiacAbilities.select(activeSpecies);
     human.teleport(player.pos, { ground: true, yaw });
     human.root.visible = true; player.setVisible(false);
     tornado.detector.reset();
   } else {
+    zodiacAbilities.select(null);
     player.pos.copy(human.position).add(new THREE.Vector3(0, 15, 0));
     player.fwd.set(Math.sin(yaw), 0, Math.cos(yaw));
     player.resetTrail(); player.update(0, elapsed);
@@ -220,10 +279,18 @@ function setPlayerMode(mode) {
   flightCircuit.setAvailable(mode === 'dragon');
   destructionChain.reset(city.score);
   switchButton.textContent = mode === 'dragon' ? 'Jogar como personagem' : 'Jogar como dragão';
-  $('touchPaint').style.display = mode === 'dragon' ? '' : 'none';
   $('touchAscend').textContent = mode === 'dragon' ? 'Subir' : 'Pular';
+  refreshCharacterUI();
 }
 switchButton.addEventListener('click', () => setPlayerMode(playerMode === 'dragon' ? 'human' : 'dragon'));
+characterSelect.addEventListener('change', () => {
+  const selected = characterSelect.value;
+  if (selected === 'dragon') setPlayerMode('dragon');
+  else if (setSpecies(selected)) setPlayerMode('human');
+  refreshCharacterUI();
+  if (coop.role === 'guest') sendLocalState();
+});
+refreshCharacterUI();
 let state = 'menu', elapsed = 0, stamina = 100;
 let yaw = Math.PI, pitch = 0, speed = FLIGHT.cruise;
 let actualSpeed = FLIGHT.cruise;
@@ -302,7 +369,9 @@ Promise.resolve().then(() => {
 });
 go.addEventListener('click', start);
 function firePaint() {
-  if (state === 'playing' && playerMode === 'dragon') meteor.fire(player.pos, player.fwd, paintColor.value);
+  if (state !== 'playing') return;
+  if (playerMode === 'dragon') meteor.fire(player.pos, player.fwd, paintColor.value);
+  else if (activeSpecies !== 'boykisser') zodiacAbilities.activate(human, yaw);
 }
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('click', () => {
@@ -429,9 +498,12 @@ function updateHuman(dt, pad) {
   const forward = clamp((keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) - stick(pad?.axes[1]) - touch.state.leftY, -1, 1);
   const strafe = clamp((keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) + stick(pad?.axes[0]) + touch.state.leftX, -1, 1);
   old.copy(human.position);
-  human.update(dt, { forward, strafe, yaw, sprint: keys.has('ShiftLeft') || keys.has('ShiftRight') || buttonDown(pad, 7) || touch.state.boost,
-    jump: keys.has('Space') || buttonDown(pad, 0) || touch.state.ascend });
+  const input = { forward, strafe, yaw, sprint: keys.has('ShiftLeft') || keys.has('ShiftRight') || buttonDown(pad, 7) || touch.state.boost,
+    jump: keys.has('Space') || buttonDown(pad, 0) || touch.state.ascend };
+  zodiacAbilities.update(dt, human, input);
   actualSpeed = dt > 0 ? old.distanceTo(human.position) / dt : 0;
+  zodiacAvatar?.animate(dt, { state: human.state, speed: actualSpeed, verticalSpeed: human.velocity.y,
+    ability: zodiacAbilities.active ? activeSpecies : '' });
   audio.setFlight(0, false);
   fx.updateSpeed(dt, human.position, humanForward.set(Math.sin(yaw), 0, Math.cos(yaw)), 0, false);
   // Existing paint and meteors continue to age, but the character cannot make new ones.
@@ -462,6 +534,8 @@ function updateCamera(dt) {
 
 function updateHud(dt) {
   updateTornadoHud(dt, playerMode === 'dragon');
+  const ability = playerMode === 'human' ? ZODIAC_ABILITIES[activeSpecies] : null;
+  $('abilityHud').textContent = ability ? `${ability.name} · ${zodiacAbilities.remaining > 0 ? `${Math.ceil(zodiacAbilities.remaining)} s` : 'pronta'}` : '';
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
   destructionChain.update(city.score, elapsed, playerMode === 'dragon' && coop.role !== 'guest');
@@ -489,6 +563,7 @@ function updateHud(dt) {
 // The host owns the city; guests send movement only and receive city changes.
 const remotes = new Map();
 const worldHistory = [], worldQueue = [];
+const guestImpacts = new Map();
 let applyingWorld = false, networkTime = 0, worldTime = 0;
 const coop = createCoop({
   onStatus: (message) => { $('coopStatus').textContent = message; },
@@ -503,6 +578,7 @@ const coop = createCoop({
   },
   onPeer: ({ id, connected }) => {
     if (!connected) {
+      guestImpacts.delete(id);
       removeRemote(id);
       if (coop.role === 'host') coop.broadcast({ type: 'depart', id });
       else if (coop.role === 'guest') { for (const key of [...remotes.keys()]) removeRemote(key); }
@@ -510,19 +586,24 @@ const coop = createCoop({
     }
     if (coop.role === 'host') {
       coop.sendTo(id, { type: 'world', events: [{ kind: 'reset' }] });
-      for (let i = 0; i < worldHistory.length; i += 30)
-        coop.sendTo(id, { type: 'world', events: worldHistory.slice(i, i + 30) });
+      const historyEnd = Math.max(0, worldHistory.length - worldQueue.length);
+      for (let i = 0; i < historyEnd; i += 30)
+        coop.sendTo(id, { type: 'world', events: worldHistory.slice(i, Math.min(i + 30, historyEnd)) });
     }
   },
   onMessage: (message, peerId) => {
     if (message.type === 'state') {
-      if (!validState(message)) return;
-      if (coop.role === 'host') {
-        // A guest can only present itself as a ground character.
-        message = { ...message, id: peerId, mode: 'human' };
-        coop.broadcast(message, peerId);
-      } else if (typeof message.id !== 'string' || message.id === coop.id) return;
-      updateRemote(message);
+      const state = readCoopState(message, { role: coop.role, peerId, selfId: coop.id });
+      if (!state) return;
+      if (coop.role === 'host') coop.broadcast(state, peerId);
+      updateRemote(state);
+    } else if (message.type === 'zodiac-impact' && coop.role === 'host') {
+      const request = readCoopZodiacImpact(message, { remote: remotes.get(peerId), elapsed, lastImpactAt: guestImpacts.get(peerId) });
+      if (!request) return;
+      guestImpacts.set(peerId, elapsed);
+      const p = new THREE.Vector3().fromArray(request.p), impact = request.impact;
+      city.destroySphere(p, impact.radius, impact.power, impact.maxChunks, true);
+      fx.bigDust(p, 8);
     } else if (message.type === 'depart' && coop.role === 'guest' && typeof message.id === 'string') {
       removeRemote(message.id);
     } else if (message.type === 'world' && coop.role === 'guest' && Array.isArray(message.events)) {
@@ -532,13 +613,12 @@ const coop = createCoop({
     }
   },
 });
-function validState(m) {
-  return Array.isArray(m.p) && m.p.length === 3 && m.p.every(v => Number.isFinite(v) && Math.abs(v) < 30000)
-    && Number.isFinite(m.yaw) && (m.mode === 'dragon' || m.mode === 'human');
-}
 function removeRemote(id) {
   const remote = remotes.get(id); if (!remote) return;
-  if (remote.mode === 'human') remote.actor.dispose();
+  if (remote.mode === 'human') {
+    if (remote.avatar) { remote.actor.root.remove(remote.avatar.root); remote.avatar.dispose(); }
+    remote.actor.dispose();
+  }
   else {
     const actor = remote.actor;
     for (const object of [actor.body, actor.head, actor.spines, actor.mane, ...actor.legs.map(leg => leg.g)]) scene.remove(object);
@@ -552,7 +632,7 @@ function removeRemote(id) {
 }
 function updateRemote(message) {
   let remote = remotes.get(message.id);
-  if (remote && remote.mode !== message.mode) { removeRemote(message.id); remote = null; }
+  if (remote && (remote.mode !== message.mode || (message.mode === 'human' && remote.species !== message.species))) { removeRemote(message.id); remote = null; }
   if (!remote) {
     if (remotes.size >= 5) return;
     if (message.mode === 'dragon') {
@@ -561,9 +641,19 @@ function updateRemote(message) {
       remote = { mode: 'dragon', actor, target: new THREE.Vector3().fromArray(message.p), yaw: message.yaw, trails: [new InkTrail(scene, camera, -9), new InkTrail(scene, camera, 9)] };
     } else {
       const actor = new Boykisser(scene, city);
-      actor.root.visible = false;
-      actor.load().then(() => { if (remotes.get(message.id)?.actor === actor) actor.root.visible = true; }).catch(console.error);
-      remote = { mode: 'human', actor, target: new THREE.Vector3().fromArray(message.p), yaw: message.yaw };
+      let avatar = null;
+      if (message.species === 'boykisser') {
+        actor.root.visible = false;
+        actor.load().then(() => {
+          if (remotes.get(message.id)?.actor === actor) actor.root.visible = true;
+          else actor.dispose();
+        }).catch(console.error);
+      } else {
+        avatar = createZodiacAvatar(message.species, { height: actor.height });
+        prepareZodiac(avatar.root);
+        actor.root.add(avatar.root);
+      }
+      remote = { mode: 'human', species: message.species, avatar, actor, target: new THREE.Vector3().fromArray(message.p), yaw: message.yaw };
       actor.position.copy(remote.target);
     }
     remotes.set(message.id, remote);
@@ -589,7 +679,8 @@ function animateRemotes(dt) {
       // buffers do not need to be rebuilt at the display refresh rate.
       remote.animationElapsed = (remote.animationElapsed || 0) + dt;
       if (remote.animationElapsed >= 1 / 20) {
-        a._animate(remote.animationElapsed, remote.speed);
+        if (remote.avatar) remote.avatar.animate(remote.animationElapsed, { state: a.state, speed: remote.speed });
+        else a._animate(remote.animationElapsed, remote.speed);
         remote.animationElapsed = 0;
       }
     }
@@ -630,10 +721,12 @@ recordWorld = (event) => {
 function setRoomControls() {
   const inRoom = !!coop.role, guest = coop.role === 'guest';
   $('coopLeave').hidden = !inRoom; $('switchCharacter').disabled = inRoom;
+  characterSelect.disabled = coop.role === 'host';
+  characterSelect.querySelector('option[value="dragon"]').disabled = guest;
   $('resetCity').disabled = guest; $('clearPaint').disabled = guest;
 }
 function joinRoom() {
-  if (!humanReady) { $('coopStatus').textContent = 'Aguarde o personagem carregar.'; return; }
+  if (activeSpecies === 'boykisser' && !humanReady) { $('coopStatus').textContent = 'Aguarde o personagem carregar.'; return; }
   if (coop.join($('coopCode').value, $('coopName').value)) {
     setPlayerMode('human'); setRoomControls();
   }
@@ -653,13 +746,17 @@ function updateNetwork(dt) {
   networkTime += dt; worldTime += dt;
   if (networkTime >= 0.08) {
     networkTime = 0;
-    coop.send({ type: 'state', id: coop.id, mode: playerMode, p: activePosition().toArray(), yaw, pitch,
-      speed: actualSpeed, color: paintColor.value, motion: playerMode === 'human' ? human.state : 'air' });
+    sendLocalState();
   }
   if (coop.role === 'host' && worldTime >= 0.15) {
     worldTime = 0;
     while (worldQueue.length) coop.send({ type: 'world', events: worldQueue.splice(0, 30) });
   }
+}
+function sendLocalState() {
+  coop.send({ type: 'state', id: coop.id, mode: playerMode, p: activePosition().toArray(), yaw, pitch,
+    speed: actualSpeed, color: paintColor.value, motion: playerMode === 'human' ? human.state : 'air',
+    species: playerMode === 'human' ? activeSpecies : undefined });
 }
 
 let qualityElapsed = 0, qualityFrames = 0, stableWindows = 0;
@@ -731,7 +828,8 @@ function frame(now) {
     }
     clouds.update(dt, cloudDragonPosition, !!cloudDragonPosition);
     city.update(dt, activePosition());
-    relics.update(old, activePosition(), yaw, elapsed, playerMode === 'human' ? human.height / 2 : 0);
+    relics.update(old, activePosition(), yaw, elapsed, playerMode === 'human' ? human.height / 2 : 0,
+      playerMode === 'human' ? zodiacAbilities.relicGuideRange : undefined);
     if (playerMode === 'dragon') flightCircuit.update(old, player.pos, yaw, elapsed, dt);
     urban.update(dt);
     polyProps.update(dt);

@@ -159,7 +159,7 @@ export function createCityRelics(scene, city, chunkSize, { count, hint, bearing,
   updateCount();
 
   return {
-    update(start, end, yaw, time, actorHeight) {
+    update(start, end, yaw, time, actorHeight, guideRange = GUIDE_RANGE) {
       const found = collection.sweep(start, end, actorHeight, actorHeight ? 2.7 : 5.5);
       if (found) {
         updateCount();
@@ -169,7 +169,7 @@ export function createCityRelics(scene, city, chunkSize, { count, hint, bearing,
         notice.textContent = '';
         noticeUntil = 0;
       }
-      let nearest = null, nearestSq = GUIDE_RANGE ** 2, visible = 0;
+      let nearest = null, nearestSq = guideRange ** 2, visible = 0;
       for (const relic of collection.remaining.values()) {
         const distanceSq = (relic.x - end.x) ** 2 + (relic.y - end.y) ** 2 + (relic.z - end.z) ** 2;
         if (distanceSq < nearestSq) { nearest = relic; nearestSq = distanceSq; }
