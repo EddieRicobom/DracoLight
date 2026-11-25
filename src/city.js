@@ -374,8 +374,7 @@ export class City {
                   attr.array[o + 2] === rgba[2] && attr.array[o + 3] === 255) continue;
               attr.array[o] = rgba[0]; attr.array[o + 1] = rgba[1];
               attr.array[o + 2] = rgba[2]; attr.array[o + 3] = 255;
-              attr.addUpdateRange(o, 4);
-              attr.needsUpdate = true;
+              queueAttributeUpdate(attr, o, 4);
               changed = true;
             }
             if (changed) count++;
@@ -403,7 +402,8 @@ export class City {
       part.paintDirty = [0, part.ids.length - 1];
     }
     for (const group of this.propGroups) for (const attr of group.paintAttrs) {
-      attr.array.fill(0); attr.clearUpdateRanges(); attr.needsUpdate = true;
+      attr.array.fill(0);
+      queueAttributeUpdate(attr, 0, attr.array.length);
     }
     paint.ctx.clearRect(0, 0, paint.canvas.width, paint.canvas.height);
     paint.tex.needsUpdate = true; paint.dirty = false; paint.t = 0.15;

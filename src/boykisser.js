@@ -34,6 +34,7 @@ export class Boykisser {
     this.ready = false;
     this.grounded = false;
     this.climbing = false;
+    this.climbYaw = null;
     this.state = 'idle';
     this.phase = 0;
     this._origin = new THREE.Vector3();
@@ -154,6 +155,7 @@ export class Boykisser {
     this.velocity.set(0, 0, 0);
     this.grounded = false;
     this.climbing = false;
+    this.climbYaw = null;
     if (ground) {
       this.position.y = 0;
       // A flight position may sit over a building. Choose nearby open street.
@@ -243,6 +245,7 @@ export class Boykisser {
     const blocked = this._blockedPath(x, z, sweep);
     const pushingWall = allowClimb && lift === undefined && blocked && inputLength > 0.15 && forward > 0.1;
     this.climbing = pushingWall;
+    this.climbYaw = pushingWall ? Math.atan2(this._move.x, this._move.z) : null;
 
     if (this.climbing) {
       this.velocity.y = this.climbSpeed * climbScale;

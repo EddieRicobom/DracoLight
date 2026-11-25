@@ -8,6 +8,8 @@ export function createTornadoHud(hud, detector) {
   ring.className = 'tornado-hud-ring';
   ring.setAttribute('role', 'progressbar');
   ring.setAttribute('aria-label', 'Formação do tornado de tinta');
+  ring.setAttribute('aria-valuemin', '0');
+  ring.setAttribute('aria-valuemax', '100');
   const label = document.createElement('span');
   label.setAttribute('role', 'status');
   container.append(ring, label);
@@ -17,6 +19,7 @@ export function createTornadoHud(hud, detector) {
   let confirmationTime = 0;
   let shownProgress = -1;
   let shownDirection = 0;
+  let shownStage = '';
 
   return (dt, enabled) => {
     if (!enabled) {
@@ -37,11 +40,13 @@ export function createTornadoHud(hud, detector) {
     if (container.hidden !== hidden) container.hidden = hidden;
     if (hidden) return;
 
+    const stage = formed ? 'formed' : 'forming';
+    if (stage !== shownStage) {
+      container.dataset.stage = stage;
+      label.textContent = formed ? 'Tornado criado!' : 'Feche a volta';
+      shownStage = stage;
+    }
     if (progress !== shownProgress) {
-      if ((shownProgress === 100) !== formed || shownProgress < 0) {
-        container.dataset.stage = formed ? 'formed' : 'forming';
-        label.textContent = formed ? 'Tornado criado!' : 'Feche a volta';
-      }
       ring.style.setProperty('--tornado-fill', `${progress}%`);
       ring.setAttribute('aria-valuenow', String(progress));
       shownProgress = progress;

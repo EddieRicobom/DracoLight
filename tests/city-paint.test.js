@@ -39,6 +39,36 @@ test('painting reports only changed chunks and ground contacts', () => {
   assert.equal(painted.length, 2);
 });
 
+test('prop repaints stay bounded until a hidden batch is uploaded', () => {
+  const city = Object.create(City.prototype);
+  const attr = new THREE.InstancedBufferAttribute(new Uint8Array(16), 4, true);
+  const group = { paintAttrs: [attr] };
+  city.grid = new Map();
+  city.paintData = new Uint8Array(0);
+  city.meshes = [];
+  city.propHash = new Map();
+  city.props = [];
+  city.propGroups = [group];
+  city._buildPaint();
+  city._addProp(2, group, 2, 0, 0, 1, null);
+  city._addProp(2, group, 0, 20, 0, 1, null);
+  const car = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < 1000; i++) {
+    assert.equal(city.paintSphere(car, 1, i % 2 ? '#ff0000' : '#0000ff'), 1);
+  }
+  assert.equal(attr.updateRanges.length, 1);
+  assert.deepEqual(attr.updateRanges[0], { start: 8, count: 4 });
+  assert.equal(city.paintSphere(new THREE.Vector3(20, 1, 0), 1, '#0000ff'), 1);
+  assert.deepEqual(attr.updateRanges, [{ start: 0, count: 12 }]);
+
+  // The next render must upload the cleared car as well as the repainted one.
+  city.clearPaint();
+  assert.equal(city.paintSphere(car, 1, '#ff0000'), 1);
+  assert.deepEqual(attr.updateRanges, [{ start: 0, count: attr.array.length }]);
+  assert.deepEqual([...attr.array.slice(0, 4)], [0, 0, 0, 0]);
+  assert.deepEqual([...attr.array.slice(8, 12)], [255, 0, 0, 255]);
+});
+
 test('ground texture batches paint uploads and clear uploads immediately', () => {
   const city = Object.create(City.prototype);
   city.grid = new Map();
@@ -67,5 +97,5 @@ test('ground texture batches paint uploads and clear uploads immediately', () =>
   city.clearPaint();
   assert.equal(city.paintTexture.version, version + 3);
   assert.deepEqual([...propPaint.array], [0, 0, 0, 0]);
-  assert.equal(propPaint.updateRanges.length, 0);
+  assert.deepEqual(propPaint.updateRanges, [{ start: 0, count: propPaint.array.length }]);
 });

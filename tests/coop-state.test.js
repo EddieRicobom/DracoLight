@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readCoopState, readCoopZodiacImpact } from '../src/coop-state.js';
+import {
+  readCoopState, readCoopZodiacImpact, readCoopZodiacPaint, readCoopZodiacMark, readCoopZodiacBurst,
+} from '../src/coop-state.js';
 import { ZODIAC_IMPACTS } from '../src/zodiac-abilities.js';
 
 const host = { role: 'host', peerId: 'guest-1', selfId: 'host' };
@@ -75,4 +77,75 @@ test('checks three-dimensional distance and the host impact interval', () => {
   assert.ok(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.5 }));
   assert.equal(readCoopZodiacImpact({ ...edge, p: [11, 45, 10] }, impactContext), null);
   assert.equal(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.501 }), null);
+});
+
+const paintPacket = {
+  type: 'zodiac-paint', species: 'rabbit', p: [10, 0.7, 25], yaw: 0.5, scale: 1.2, color: '#ef4444',
+};
+const paintContext = { remote: { mode: 'human', species: 'rabbit', target: { x: 10, y: 0, z: 20 } }, elapsed: 7 };
+
+test('accepts a nearby guest brushstroke with its own colour and size', () => {
+  assert.deepEqual(readCoopZodiacPaint(paintPacket, paintContext), {
+    species: 'rabbit', p: [10, 0.7, 25], yaw: 0.5, scale: 1.2, color: '#ef4444',
+  });
+  assert.ok(readCoopZodiacPaint({ ...paintPacket, scale: 2.6 }, paintContext));
+});
+
+const markPacket = {
+  type: 'zodiac-mark', species: 'rabbit', p: [10, 80, 20], radius: 5, color: '#eF4444',
+};
+
+test('accepts a guest mark at the radius, distance and time limits', () => {
+  const { species, p, radius, color } = markPacket;
+  assert.deepEqual(readCoopZodiacMark(markPacket, { ...paintContext, lastMarkAt: 6.9 }),
+    { species, p, radius, color });
+  assert.ok(readCoopZodiacMark(markPacket, paintContext));
+});
+
+test('rejects malformed, distant and overfrequent guest marks', () => {
+  const malformed = [
+    { type: 'zodiac-paint' }, { species: 'ox' }, { radius: 0 }, { radius: -1 }, { radius: 5.01 },
+    { radius: Infinity }, { radius: '5' }, { color: 'red' }, { color: '#xyzxyz' },
+    { p: [11, 80, 20] }, { p: [10, 80] }, { p: [Infinity, 0, 20] },
+  ];
+  for (const fields of malformed) assert.equal(readCoopZodiacMark({ ...markPacket, ...fields }, paintContext), null);
+  assert.equal(readCoopZodiacMark(markPacket, { ...paintContext, lastMarkAt: 6.901 }), null);
+  assert.equal(readCoopZodiacMark(markPacket, { ...paintContext, elapsed: NaN }), null);
+  for (const remote of [null, { ...paintContext.remote, mode: 'dragon' }, { ...paintContext.remote, target: null }]) {
+    assert.equal(readCoopZodiacMark(markPacket, { ...paintContext, remote }), null);
+  }
+});
+
+const burstPacket = {
+  type: 'zodiac-burst', species: 'rabbit', kind: 'breach', p: [10, 2, 25], yaw: 0.5, color: '#ef4444',
+};
+const burstContext = { remote: { mode: 'human', species: 'rabbit', target: { x: 10, y: 0, z: 20 } }, elapsed: 7 };
+
+test('accepts guest wall breaches and comets near the sending character', () => {
+  assert.deepEqual(readCoopZodiacBurst(burstPacket, burstContext), {
+    species: 'rabbit', kind: 'breach', p: [10, 2, 25], yaw: 0.5, color: '#ef4444',
+  });
+  assert.ok(readCoopZodiacBurst({ ...burstPacket, kind: 'comet' }, burstContext));
+});
+
+test('rejects unknown burst kinds, distant targets and malformed fields', () => {
+  assert.equal(readCoopZodiacBurst({ ...burstPacket, kind: 'nuke' }, burstContext), null);
+  assert.equal(readCoopZodiacBurst({ ...burstPacket, species: 'ox' }, burstContext), null);
+  assert.equal(readCoopZodiacBurst({ ...burstPacket, yaw: NaN }, burstContext), null);
+  assert.equal(readCoopZodiacBurst({ ...burstPacket, color: 'blue' }, burstContext), null);
+  assert.equal(readCoopZodiacBurst({ ...burstPacket, p: [10, 2, 300] }, burstContext), null);
+  assert.equal(readCoopZodiacBurst(burstPacket, { ...burstContext, lastBurstAt: 6.9 }), null);
+  assert.equal(readCoopZodiacBurst(burstPacket, { ...burstContext, remote: { ...burstContext.remote, mode: 'dragon' } }), null);
+});
+
+test('rejects mismatched, malformed or overfrequent guest paint', () => {
+  assert.equal(readCoopZodiacPaint({ ...paintPacket, type: 'paint' }, paintContext), null);
+  assert.equal(readCoopZodiacPaint(paintPacket, { ...paintContext, remote: { ...paintContext.remote, mode: 'dragon' } }), null);
+  assert.equal(readCoopZodiacPaint({ ...paintPacket, species: 'ox' }, paintContext), null);
+  assert.equal(readCoopZodiacPaint({ ...paintPacket, yaw: Infinity }, paintContext), null);
+  assert.equal(readCoopZodiacPaint({ ...paintPacket, scale: 0 }, paintContext), null);
+  assert.equal(readCoopZodiacPaint({ ...paintPacket, scale: 5 }, paintContext), null);
+  assert.equal(readCoopZodiacPaint({ ...paintPacket, color: 'red' }, paintContext), null);
+  assert.equal(readCoopZodiacPaint({ ...paintPacket, p: [10, 0, 300] }, paintContext), null);
+  assert.equal(readCoopZodiacPaint(paintPacket, { ...paintContext, lastPaintAt: 6.95 }), null);
 });

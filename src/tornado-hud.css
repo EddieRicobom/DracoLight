@@ -29,6 +29,19 @@
   background: conic-gradient(var(--tornado-accent) var(--tornado-fill, 0%), #ffffff34 0);
 }
 
+.tornado-hud-ring::before {
+  position: absolute;
+  z-index: 1;
+  top: -2px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--tornado-accent);
+  content: '';
+}
+
 .tornado-hud-ring::after {
   position: absolute;
   inset: 3px;

@@ -159,6 +159,19 @@ export function createCityRelics(scene, city, chunkSize, { count, hint, bearing,
   updateCount();
 
   return {
+    /** Nearest uncollected relic, used by the dog's ink-scent ability. */
+    nearest(position, range = Infinity) {
+      if (!position || !Number.isFinite(range)) return null;
+      let nearest = null, nearestSq = range * range;
+      for (const relic of collection.remaining.values()) {
+        const dx = relic.x - position.x, dy = relic.y - position.y, dz = relic.z - position.z;
+        const distanceSq = dx * dx + dy * dy + dz * dz;
+        if (distanceSq >= nearestSq) continue;
+        nearest = relic;
+        nearestSq = distanceSq;
+      }
+      return nearest ? { x: nearest.x, y: nearest.y, z: nearest.z } : null;
+    },
     update(start, end, yaw, time, actorHeight, guideRange = GUIDE_RANGE) {
       const found = collection.sweep(start, end, actorHeight, actorHeight ? 2.7 : 5.5);
       if (found) {

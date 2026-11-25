@@ -24,6 +24,35 @@ test('paint ball captures the velocity of the crossing and impacts the city', ()
   assert.equal(scene.children.length, 0);
 });
 
+test('a ground character can call down an already charged comet', () => {
+  const hits = [];
+  const scene = new THREE.Scene();
+  const meteor = new PaintMeteor(scene, { destroySphere: (...args) => hits.push(args) });
+  const ball = meteor.launch(new THREE.Vector3(0, 80, 0),
+    new THREE.Vector3(0, -0.8, 1).normalize(), 75, '#ef4444');
+  assert.ok(ball);
+  assert.equal(ball.state, 'meteor');
+  assert.ok(Math.abs(ball.velocity.length() - 75) < .001);
+  for (let i = 0; i < 100 && meteor.balls.length; i++) meteor.update(.1, null, null, 0);
+  assert.ok(hits.length > 0);
+  meteor.reset();
+  assert.equal(scene.children.length, 0);
+});
+
+test('a visual-only comet cannot paint, destroy or steer the shared world', () => {
+  const hits = [], paints = [], pushes = [];
+  const meteor = new PaintMeteor(new THREE.Scene(), { destroySphere: (...args) => hits.push(args) });
+  meteor.onPaint = (...args) => paints.push(args);
+  meteor.tornado = { hitByPaintBall: (...args) => pushes.push(args) };
+  meteor.launch(new THREE.Vector3(0, 80, 0), new THREE.Vector3(0, -1, 0), 75, '#ef4444', { visualOnly: true });
+  for (let i = 0; i < 100 && (meteor.balls.length || meteor.impacts.length); i++) meteor.update(0.1, null, null, 0);
+  assert.equal(hits.length, 0);
+  assert.equal(paints.length, 0);
+  assert.equal(pushes.length, 0);
+  assert.equal(meteor.balls.length, 0);
+  meteor.dispose();
+});
+
 test('a travelling paint ball sweeps through a tornado and can still become a meteor', () => {
   const scene = new THREE.Scene();
   const tornado = new PaintTornado(scene);

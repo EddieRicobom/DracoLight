@@ -128,6 +128,21 @@ test('Horse gains speed while moving and Goat climbs more quickly than the base 
   assert.ok(goat.actor.position.y > base.actor.position.y * 2.5);
 });
 
+test('A wall kick carries the animal away from the climbing surface even when looking elsewhere', () => {
+  const { actor, step } = setup('horse', true);
+  actor.position.x = 4;
+  step(6, { forward: 1 });
+  assert.equal(actor.climbing, true);
+  const wallPosition = actor.position.clone();
+
+  step(1, { forward: 1, jump: true, yaw: 0 });
+  assert.ok(actor.position.x < wallPosition.x);
+  assert.ok(actor.position.y > wallPosition.y);
+  step(3, { forward: 1, jump: true });
+  assert.ok(actor.position.x < wallPosition.x - 1);
+  assert.equal(actor.climbing, false);
+});
+
 test('Monkey vaults higher when aimed at a façade and Rooster can glide in the air', () => {
   const wall = setup('monkey', true);
   const field = setup('monkey');

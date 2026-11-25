@@ -4,7 +4,7 @@ import { Dragon, PALETTES } from './dragon.js';
 import { Boykisser } from './boykisser.js';
 import { ZODIAC_ANIMALS, createZodiacAvatar } from './zodiac.js';
 import { ZodiacAbilities, ZODIAC_ABILITIES, ZODIAC_IMPACTS } from './zodiac-abilities.js';
-import { readCoopState, readCoopZodiacImpact } from './coop-state.js';
+import { readCoopState, readCoopZodiacImpact, readCoopZodiacPaint, readCoopZodiacBurst, readCoopZodiacMark } from './coop-state.js';
 import { createCoop } from './coop.js';
 import { City, CH, HALF } from './city.js';
 import { createCityRelics } from './relics.js';
@@ -20,6 +20,8 @@ import { advanceDiveSpeed, advanceDiveImpact } from './dive.js';
 import { PaintTornado } from './tornado.js';
 import { createTornadoHud } from './tornado-hud.js';
 import { PaintMeteor } from './meteor.js';
+import { PaintBallEffects } from './paint-ball-effects.js';
+import { ZODIAC_INK, inkPatternPoints, InkFlow } from './zodiac-ink.js';
 import { DestructionChain } from './destruction-chain.js';
 import { makeMonochrome } from './monochrome.js';
 import { addInkOutline } from './outline.js';
@@ -102,6 +104,8 @@ const fx = new FX(scene, camera);
 for (const item of scene.children) makeMonochrome(item);
 const inkLeft = new InkTrail(scene, camera, -9);
 const inkRight = new InkTrail(scene, camera, 9);
+// Ground characters paint with a single, lower ribbon instead of dragon wings.
+let zodiacInk = null;
 const tornado = new PaintTornado(scene);
 const updateTornadoHud = createTornadoHud(hud, tornado.detector);
 const paintColor = $('paintColor');
@@ -109,6 +113,7 @@ const paintPresets = document.querySelectorAll('input[name="paintPreset"]');
 function choosePaint(color) {
   inkLeft.setColor(color);
   inkRight.setColor(color);
+  zodiacInk?.setColor(color);
   paintColor.value = color;
 }
 paintPresets.forEach((preset) => preset.addEventListener('change', () => {
@@ -121,6 +126,11 @@ paintColor.addEventListener('input', () => {
 $('clearPaint').addEventListener('click', () => {
   inkLeft.clear();
   inkRight.clear();
+  zodiacInk?.clear();
+  animalInkEffects.reset();
+  animalFlow.reset();
+  wallBreachAt = -Infinity;
+  zodiacAbilities.ink = 0;
   tornado.clear();
   city.clearPaint();
   recordWorld({ kind: 'clear' });
@@ -135,6 +145,7 @@ const paintWorld = (position, radius, color) => {
   const changed = city.paintSphere(position, radius, color);
   if (changed > 0)
     recordWorld({ kind: 'paint', p: position.toArray(), r: radius, color: new THREE.Color(color).getHex() });
+  return changed;
 };
 const destroyWorld = city.destroySphere.bind(city);
 city.destroySphere = (position, radius, power, maxN, forceSync = false) => {
@@ -168,6 +179,13 @@ const resetButton = $('resetCity');
 resetButton.addEventListener('click', () => {
   city.reset();
   destructionChain.reset();
+  zodiacInk?.clear();
+  animalInkEffects.reset();
+  animalFlow.reset();
+  inkSurfBoost = 0;
+  wallBreachAt = -Infinity;
+  guestBurstSentAt.clear();
+  zodiacAbilities.ink = 0;
   recordWorld({ kind: 'reset' });
   urban.reset();
   polyProps.reset();
@@ -211,6 +229,163 @@ for (const [id, label] of [['dragon', 'Dragão'], ['boykisser', 'Personagem orig
   const option = document.createElement('option'); option.value = id; option.textContent = label; characterSelect.append(option);
 }
 const zodiacAbilities = new ZodiacAbilities({ city, onEffect: handleZodiacEffect });
+zodiacInk = new InkTrail(scene, camera, 0);
+zodiacInk.onPaint = (position, radius, color) => {
+  if (paintWorld(position, radius, color) > 0) {
+    zodiacAbilities.addInk(0.004);
+    syncGuestMark(position, radius, color);
+  }
+};
+zodiacInk.setColor(paintColor.value);
+const animalInkEffects = new PaintBallEffects(scene);
+const animalFlow = new InkFlow();
+let inkSurfBoost = 0, inkNoticeUntil = 0, inkScentTime = 0, guestInkSentAt = -Infinity, guestMarkSentAt = -Infinity;
+let wallBreachAt = -Infinity;
+const guestBurstSentAt = new Map();
+const inkPaintPoint = new THREE.Vector3();
+const inkTrailPoint = new THREE.Vector3();
+const inkEffectOrigin = new THREE.Vector3();
+const breachOrigin = new THREE.Vector3();
+const breachDirection = new THREE.Vector3();
+const cometOrigin = new THREE.Vector3();
+const cometDirection = new THREE.Vector3();
+
+function showInkNotice(text, seconds = 2) {
+  $('inkNotice').textContent = text;
+  inkNoticeUntil = elapsed + seconds;
+}
+
+function paintInkPattern(id, position, direction, scale = 1, color = paintColor.value, creditInk = true) {
+  const descriptor = ZODIAC_INK[id];
+  if (!descriptor) return 0;
+  const points = inkPatternPoints(descriptor.style, position, direction, scale);
+  let painted = 0;
+  for (const point of points) {
+    inkPaintPoint.set(point.x, point.y, point.z);
+    painted += paintWorld(inkPaintPoint, point.r, color);
+  }
+  if (creditInk && painted > 0) zodiacAbilities.addInk(Math.min(0.1, 0.008 + painted * 0.0004));
+  return painted;
+}
+
+function sprayInk(position, radius, velocity = 0, color = paintColor.value) {
+  inkEffectOrigin.set(position.x, Math.max(0.6, position.y - 1), position.z);
+  animalInkEffects.burst(inkEffectOrigin, radius, new THREE.Color(color),
+    new THREE.Vector3(velocity * Math.sin(yaw), 0, velocity * Math.cos(yaw)));
+}
+
+function triggerInkSurf() {
+  if (!ZODIAC_ABILITIES[activeSpecies]) return;
+  inkSurfBoost = 0.9;
+  zodiacAbilities.refund(0.75);
+  zodiacAbilities.addInk(0.18);
+  paintInkPattern(activeSpecies, human.position, humanForward, 1.15);
+  syncGuestInk(activeSpecies, human.position, humanForward, 1.15);
+  fx.bigDust(human.position, 3);
+  fx.sparks(human.position, 8);
+  fx.shake = Math.max(fx.shake, 0.28);
+  sprayInk(human.position, 2.5, actualSpeed * 0.2);
+  audio.play('charge');
+  showInkNotice('Laço de tinta! Ímpeto renovado', 1.8);
+}
+
+function syncGuestInk(id, position, direction, scale) {
+  if (coop.role !== 'guest' || elapsed - guestInkSentAt < 0.12) return;
+  guestInkSentAt = elapsed;
+  coop.send({
+    type: 'zodiac-paint',
+    species: id,
+    p: [position.x, position.y, position.z],
+    yaw: Math.atan2(direction.x, direction.z),
+    scale,
+    color: paintColor.value,
+  });
+}
+
+function syncGuestMark(position, radius, color) {
+  if (coop.role !== 'guest' || elapsed - guestMarkSentAt < 0.12) return;
+  const sent = coop.send({ type: 'zodiac-mark', species: activeSpecies,
+    p: [position.x, position.y, position.z], radius: Math.min(5, radius),
+    color: `#${new THREE.Color(color).getHexString(THREE.SRGBColorSpace)}` });
+  if (sent) guestMarkSentAt = elapsed;
+}
+
+function syncGuestBurst(kind, position, direction, color = paintColor.value) {
+  if (coop.role !== 'guest' || elapsed - (guestBurstSentAt.get(kind) ?? -Infinity) < 0.2) return;
+  const sent = coop.send({
+    type: 'zodiac-burst',
+    species: activeSpecies,
+    kind,
+    p: [position.x, position.y, position.z],
+    yaw: Math.atan2(direction.x, direction.z),
+    color,
+  });
+  if (sent) guestBurstSentAt.set(kind, elapsed);
+}
+
+function launchInkComet(position, direction, color = paintColor.value, visualOnly = false) {
+  cometOrigin.set(position.x, Math.max(position.y + 40, 45), position.z);
+  cometDirection.set(direction.x * 0.65, -0.8, direction.z * 0.65);
+  if (cometDirection.lengthSq() < 1e-6) cometDirection.set(0, -1, 0);
+  cometDirection.normalize();
+  meteor.launch(cometOrigin, cometDirection, 75, color, { visualOnly });
+}
+
+function applyRemoteBurst(request) {
+  const p = new THREE.Vector3().fromArray(request.p);
+  const direction = new THREE.Vector3(Math.sin(request.yaw), 0, Math.cos(request.yaw));
+  if (request.kind === 'comet') {
+    launchInkComet(p, direction, request.color);
+    paintInkPattern(request.species, p, direction, 2.6, request.color, false);
+    return;
+  }
+  city.destroySphere(p, 4.8, 32, 18, true);
+  paintInkPattern(request.species, p, direction, 0.9, request.color, false);
+  sprayInk(p, 4, 20, request.color);
+  fx.bigDust(p, 6);
+  fx.shake = Math.max(fx.shake, 0.35);
+  audio.play('impact');
+}
+
+function breachWall() {
+  if (!ZODIAC_ABILITIES[activeSpecies] || elapsed - wallBreachAt < 0.42) return false;
+  breachDirection.set(Math.sin(yaw), 0, Math.cos(yaw));
+  breachOrigin.copy(human.position);
+  breachOrigin.y += human.height * 0.5;
+  const hit = city.raycast(breachOrigin, breachDirection, 3.5);
+  if (hit > 3.5) return false;
+  breachOrigin.addScaledVector(breachDirection, hit);
+  wallBreachAt = elapsed;
+  if (coop.role !== 'guest') city.destroySphere(breachOrigin, 4.8, 32, 18, true);
+  paintInkPattern(activeSpecies, breachOrigin, breachDirection, 0.9);
+  sprayInk(breachOrigin, 4, 22);
+  fx.bigDust(breachOrigin, 6);
+  fx.sparks(breachOrigin, 8);
+  fx.shake = Math.max(fx.shake, 0.42);
+  audio.play('impact');
+  zodiacAbilities.addInk(0.05);
+  syncGuestBurst('breach', breachOrigin, breachDirection);
+  if (inkNoticeUntil <= elapsed) showInkNotice('Passagem de tinta!', 1.1);
+  return true;
+}
+
+function updateScentPath(dt) {
+  inkScentTime -= dt;
+  if (inkScentTime > 0) return;
+  inkScentTime = 0.35;
+  const target = relics.nearest(human.position, 1100);
+  if (!target) return;
+  const dx = target.x - human.position.x, dz = target.z - human.position.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance < 2) return;
+  for (let step = 7; step <= Math.min(distance, 42); step += 7) {
+    inkPaintPoint.set(human.position.x + dx / distance * step, 0.7, human.position.z + dz / distance * step);
+    paintWorld(inkPaintPoint, 1.4, paintColor.value);
+    syncGuestMark(inkPaintPoint, 1.4, paintColor.value);
+  }
+  zodiacAbilities.addInk(0.008);
+}
+
 function prepareZodiac(root) {
   const materials = new Set();
   root.traverse((object) => {
@@ -221,11 +396,41 @@ function prepareZodiac(root) {
   makeMonochrome(root);
   for (const material of materials) addInkOutline(material);
 }
-function handleZodiacEffect({ id, type, position, direction }) {
-  if (type === 'start') fx.dust(position, 1.4, 1);
-  if (type === 'trail') fx.dust(position, 0.65, 1);
+function handleZodiacEffect({ id, type, position, direction, scale = 1 }) {
+  if (type === 'start') {
+    fx.dust(position, 1.4, 1);
+    if (id === 'dog') inkScentTime = 0;
+    paintInkPattern(id, position, direction, 0.55 * scale);
+    syncGuestInk(id, position, direction, 0.55 * scale);
+    return;
+  }
+  if (type === 'trail') { fx.dust(position, 0.65, 1); return; }
+  if (type === 'ink') {
+    paintInkPattern(id, position, direction, scale);
+    sprayInk(position, 3, 18);
+    fx.dust(position, 0.8, 0.7);
+    syncGuestInk(id, position, direction, scale);
+    return;
+  }
+  if (type === 'surge') {
+    // The masterstroke is a large, visible signature on the paper city.
+    paintInkPattern(id, position, direction, 2.6);
+    fx.bigDust(position, 12);
+    fx.sparks(position, 14);
+    sprayInk(position, 8, 30);
+    fx.shake = Math.max(fx.shake, 0.6);
+    audio.play('charge');
+    launchInkComet(position, direction, paintColor.value, coop.role === 'guest');
+    syncGuestBurst('comet', position, direction);
+    showInkNotice(`${ZODIAC_INK[id]?.label ?? 'Obra-prima'} · Cometa de tinta!`, 2.4);
+    return;
+  }
   if (type !== 'impact') return;
   fx.bigDust(position, 8);
+  paintInkPattern(id, position, direction, 1.25 * scale);
+  sprayInk(position, 6, 26);
+  fx.shake = Math.max(fx.shake, 0.3);
+  syncGuestInk(id, position, direction, 1.25 * scale);
   const impact = ZODIAC_IMPACTS[id];
   if (!impact) return;
   if (coop.role === 'guest') {
@@ -238,6 +443,12 @@ function setSpecies(id) {
   if (id !== 'boykisser' && !ZODIAC_ABILITIES[id]) return false;
   if (id === 'boykisser' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return false; }
   if (zodiacAvatar) { human.root.remove(zodiacAvatar.root); zodiacAvatar.dispose(); zodiacAvatar = null; }
+  zodiacInk?.clear();
+  animalInkEffects.reset();
+  animalFlow.reset();
+  inkSurfBoost = 0;
+  wallBreachAt = -Infinity;
+  guestBurstSentAt.clear();
   activeSpecies = id;
   zodiacAbilities.select(id);
   if (human.model) human.model.visible = id === 'boykisser';
@@ -252,7 +463,8 @@ function refreshCharacterUI() {
   characterSelect.value = playerMode === 'dragon' ? 'dragon' : activeSpecies;
   $('characterDescription').textContent = playerMode === 'dragon'
     ? 'Voo livre, tinta, tornados e meteoros.'
-    : activeSpecies === 'boykisser' ? 'Corre rápido e escala prédios.' : ZODIAC_ABILITIES[activeSpecies].description;
+    : activeSpecies === 'boykisser' ? 'Corre rápido e escala prédios.'
+      : `${ZODIAC_ABILITIES[activeSpecies].description} Tinta: ${ZODIAC_INK[activeSpecies].label}. Feche um laço para ganhar ímpeto; com Shift, abra passagens nas paredes; a Obra-prima chama um cometa de tinta.`;
   const action = $('touchPaint');
   action.style.display = playerMode === 'dragon' || activeSpecies !== 'boykisser' ? '' : 'none';
   action.textContent = playerMode === 'dragon' ? 'Tinta' : 'Habilidade';
@@ -262,6 +474,13 @@ function setPlayerMode(mode) {
   if (mode === playerMode) return;
   if (mode === 'dragon' && coop.role === 'guest') return;
   if (mode === 'human' && activeSpecies === 'boykisser' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return; }
+  zodiacInk?.clear();
+  animalInkEffects.reset();
+  animalFlow.reset();
+  inkSurfBoost = 0;
+  inkScentTime = 0;
+  wallBreachAt = -Infinity;
+  guestBurstSentAt.clear();
   if (mode === 'human') {
     zodiacAbilities.select(activeSpecies);
     human.teleport(player.pos, { ground: true, yaw });
@@ -499,18 +718,36 @@ function updateHuman(dt, pad) {
   const strafe = clamp((keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0) + stick(pad?.axes[0]) + touch.state.leftX, -1, 1);
   old.copy(human.position);
   const input = { forward, strafe, yaw, sprint: keys.has('ShiftLeft') || keys.has('ShiftRight') || buttonDown(pad, 7) || touch.state.boost,
-    jump: keys.has('Space') || buttonDown(pad, 0) || touch.state.ascend };
+    jump: keys.has('Space') || buttonDown(pad, 0) || touch.state.ascend,
+    flowBoost: inkSurfBoost > 0 ? 1.35 : 1 };
+  const inked = Boolean(ZODIAC_ABILITIES[activeSpecies]);
   zodiacAbilities.update(dt, human, input);
   actualSpeed = dt > 0 ? old.distanceTo(human.position) / dt : 0;
+  if (inked && input.sprint && !zodiacAbilities.active && human.climbing) breachWall();
   zodiacAvatar?.animate(dt, { state: human.state, speed: actualSpeed, verticalSpeed: human.velocity.y,
     ability: zodiacAbilities.active ? activeSpecies : '' });
+  humanForward.set(Math.sin(yaw), 0, Math.cos(yaw));
+  const moving = human.state !== 'idle';
+  inkTrailPoint.copy(human.position);
+  inkTrailPoint.y += 1.1;
+  if (inked) {
+    animalFlow.record(human.position, elapsed, (human.grounded || human.climbing) && actualSpeed > 6);
+    if (human.grounded && actualSpeed > 12 && animalFlow.surf(human.position, elapsed)) triggerInkSurf();
+    zodiacInk.update(dt, inkTrailPoint, humanForward, Math.max(actualSpeed, zodiacAbilities.active ? 20 : 0),
+      zodiacAbilities.active || actualSpeed > 26, moving || zodiacAbilities.active);
+    if (activeSpecies === 'dog' && zodiacAbilities.active) updateScentPath(dt);
+  } else {
+    animalFlow.record(human.position, elapsed, false);
+    zodiacInk.update(dt, inkTrailPoint, humanForward, 0, false, false);
+  }
   audio.setFlight(0, false);
-  fx.updateSpeed(dt, human.position, humanForward.set(Math.sin(yaw), 0, Math.cos(yaw)), 0, false);
+  fx.updateSpeed(dt, human.position, humanForward, 0, false);
   // Existing paint and meteors continue to age, but the character cannot make new ones.
   inkLeft.update(dt, player.pos, player.fwd, 0, false, false);
   inkRight.update(dt, player.pos, player.fwd, 0, false, false);
   tornado.update(dt, human.position, humanForward, 0, paintColor.value);
   meteor.update(dt, null, null, 0);
+  inkSurfBoost = Math.max(0, inkSurfBoost - dt);
 }
 const humanForward = new THREE.Vector3();
 const followPlayer = createPlayerCamera(camera, {
@@ -535,10 +772,19 @@ function updateCamera(dt) {
 function updateHud(dt) {
   updateTornadoHud(dt, playerMode === 'dragon');
   const ability = playerMode === 'human' ? ZODIAC_ABILITIES[activeSpecies] : null;
-  $('abilityHud').textContent = ability ? `${ability.name} · ${zodiacAbilities.remaining > 0 ? `${Math.ceil(zodiacAbilities.remaining)} s` : 'pronta'}` : '';
+  const inkPercent = Math.round(zodiacAbilities.ink * 100);
+  $('inkBar').hidden = !ability;
+  $('inkP').firstElementChild.style.width = `${inkPercent}%`;
+  $('abilityHud').textContent = ability
+    ? `${ability.name} · ${zodiacAbilities.remaining > 0 ? `${Math.ceil(zodiacAbilities.remaining)} s` : 'pronta'} · ${zodiacAbilities.surgeReady ? 'Obra-prima pronta' : `Tinta ${inkPercent}%`}`
+    : '';
+  if (inkNoticeUntil && elapsed >= inkNoticeUntil) {
+    $('inkNotice').textContent = '';
+    inkNoticeUntil = 0;
+  }
   $('stP').firstElementChild.style.width = `${stamina}%`;
   $('sc').textContent = city.score.toLocaleString('pt-BR');
-  destructionChain.update(city.score, elapsed, playerMode === 'dragon' && coop.role !== 'guest');
+  destructionChain.update(city.score, elapsed, coop.role !== 'guest');
   const { current, best, seconds } = destructionChain;
   if (current !== shownCombo || seconds !== shownComboSeconds) {
     shownCombo = current;
@@ -563,7 +809,7 @@ function updateHud(dt) {
 // The host owns the city; guests send movement only and receive city changes.
 const remotes = new Map();
 const worldHistory = [], worldQueue = [];
-const guestImpacts = new Map();
+const guestImpacts = new Map(), guestPaints = new Map(), guestBursts = new Map(), guestMarks = new Map();
 let applyingWorld = false, networkTime = 0, worldTime = 0;
 const coop = createCoop({
   onStatus: (message) => { $('coopStatus').textContent = message; },
@@ -579,6 +825,9 @@ const coop = createCoop({
   onPeer: ({ id, connected }) => {
     if (!connected) {
       guestImpacts.delete(id);
+      guestMarks.delete(id);
+      guestPaints.delete(id);
+      guestBursts.delete(`${id}:breach`); guestBursts.delete(`${id}:comet`);
       removeRemote(id);
       if (coop.role === 'host') coop.broadcast({ type: 'depart', id });
       else if (coop.role === 'guest') { for (const key of [...remotes.keys()]) removeRemote(key); }
@@ -597,10 +846,48 @@ const coop = createCoop({
       if (!state) return;
       if (coop.role === 'host') coop.broadcast(state, peerId);
       updateRemote(state);
-    } else if (message.type === 'zodiac-impact' && coop.role === 'host') {
-      const request = readCoopZodiacImpact(message, { remote: remotes.get(peerId), elapsed, lastImpactAt: guestImpacts.get(peerId) });
+    } else if (message.type === 'zodiac-mark' && coop.role === 'host') {
+      const receivedAt = performance.now() / 1000;
+      const request = readCoopZodiacMark(message, { remote: remotes.get(peerId), elapsed: receivedAt, lastMarkAt: guestMarks.get(peerId) });
       if (!request) return;
-      guestImpacts.set(peerId, elapsed);
+      guestMarks.set(peerId, receivedAt);
+      paintWorld(new THREE.Vector3().fromArray(request.p), request.radius, request.color);
+    } else if (message.type === 'zodiac-paint' && coop.role === 'host') {
+      const receivedAt = performance.now() / 1000;
+      const request = readCoopZodiacPaint(message, {
+        remote: remotes.get(peerId), elapsed: receivedAt, lastPaintAt: guestPaints.get(peerId),
+      });
+      if (!request) return;
+      guestPaints.set(peerId, receivedAt);
+      const p = new THREE.Vector3().fromArray(request.p);
+      const direction = new THREE.Vector3(Math.sin(request.yaw), 0, Math.cos(request.yaw));
+      paintInkPattern(request.species, p, direction, request.scale, request.color, false);
+      fx.dust(p, 0.9, 1);
+      if (request.scale > 1.8) {
+        sprayInk(p, 5, 20, request.color);
+        fx.shake = Math.max(fx.shake, 0.3);
+      }
+    } else if (message.type === 'zodiac-burst' && coop.role === 'host') {
+      const receivedAt = performance.now() / 1000;
+      const burstKey = `${peerId}:${message.kind}`;
+      const request = readCoopZodiacBurst(message, {
+        remote: remotes.get(peerId), elapsed: receivedAt, lastBurstAt: guestBursts.get(burstKey),
+      });
+      if (!request) return;
+      guestBursts.set(burstKey, receivedAt);
+      applyRemoteBurst(request);
+      if (request.kind === 'comet') coop.broadcast({ type: 'zodiac-comet-visual', p: request.p, yaw: request.yaw, color: request.color }, peerId);
+    } else if (message.type === 'zodiac-comet-visual' && coop.role === 'guest') {
+      if (!Array.isArray(message.p) || message.p.length !== 3 || !message.p.every(v => Number.isFinite(v) && Math.abs(v) < 30000)
+          || !Number.isFinite(message.yaw) || typeof message.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(message.color)) return;
+      const p = new THREE.Vector3().fromArray(message.p);
+      const direction = new THREE.Vector3(Math.sin(message.yaw), 0, Math.cos(message.yaw));
+      launchInkComet(p, direction, message.color, true);
+    } else if (message.type === 'zodiac-impact' && coop.role === 'host') {
+      const receivedAt = performance.now() / 1000;
+      const request = readCoopZodiacImpact(message, { remote: remotes.get(peerId), elapsed: receivedAt, lastImpactAt: guestImpacts.get(peerId) });
+      if (!request) return;
+      guestImpacts.set(peerId, receivedAt);
       const p = new THREE.Vector3().fromArray(request.p), impact = request.impact;
       city.destroySphere(p, impact.radius, impact.power, impact.maxChunks, true);
       fx.bigDust(p, 8);
@@ -691,10 +978,16 @@ function applyWorld(event) {
   if (event.kind === 'reset') {
     city.reset(); urban.reset(); polyProps.reset(); fx.burning.length = 0; meteor.reset();
     destructionChain.reset();
+    zodiacInk?.clear(); animalInkEffects.reset(); animalFlow.reset();
+    inkSurfBoost = 0; wallBreachAt = -Infinity; guestBurstSentAt.clear(); zodiacAbilities.ink = 0;
     $('sc').textContent = '0'; $('coopStatus').textContent = 'Cidade reconstruída pelo anfitrião.';
     return;
   }
-  if (event.kind === 'clear') { city.clearPaint(); return; }
+  if (event.kind === 'clear') {
+    city.clearPaint(); zodiacInk?.clear(); animalInkEffects.reset(); animalFlow.reset();
+    zodiacAbilities.ink = 0;
+    return;
+  }
   if (!Array.isArray(event.p) || event.p.length !== 3 || !event.p.every(v => Number.isFinite(v) && Math.abs(v) < 30000)
       || !Number.isFinite(event.r) || event.r <= 0 || event.r > 100) return;
   const p = new THREE.Vector3().fromArray(event.p);
@@ -844,7 +1137,16 @@ function frame(now) {
     sky.updateAltitude?.(150, U.uTime.value);
     U.uTime.value += dt;
   }
+  // A paused host still owns the shared world: guests' comets and collapses
+  // must keep progressing while the host is in a menu.
+  if (state !== 'playing' && coop.role === 'host' && coop.peers.length) {
+    meteor.update(dt, null, null, 0);
+    city.update(dt, activePosition());
+    urban.update(dt);
+    polyProps.update(dt);
+  }
   updateNetwork(dt);
+  animalInkEffects.update(dt);
   // New buildings, ink and remote players can appear while the game runs.
   // Prepare their materials periodically without walking the scene every frame.
   if (halftoneUniform.value > 0) {

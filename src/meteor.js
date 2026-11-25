@@ -49,6 +49,26 @@ export class PaintMeteor {
     return ball;
   }
 
+  /** Start a shot already charged, so a ground character can call down a comet. */
+  launch(pos, direction, speed = 100, color, { visualOnly = false } = {}) {
+    if (!finiteVector(pos) || !finiteVector(direction)) return null;
+    const forward = new THREE.Vector3(direction.x, direction.y, direction.z);
+    if (forward.lengthSq() < 1e-8) return null;
+    forward.normalize();
+    const ball = this.fire(pos, forward, color);
+    if (!ball) return null;
+    ball.position.copy(pos).addScaledVector(forward, ball.radius * 1.2);
+    ball.state = 'meteor';
+    ball.visualOnly = visualOnly;
+    ball.velocity.copy(forward).multiplyScalar(Math.max(0, speed));
+    ball.age = 0;
+    ball.trailDistance = 0;
+    this.effects.ignite(ball);
+    this.fx?.sparks?.(ball.position, 14);
+    this.audio?.play?.('charge');
+    return ball;
+  }
+
   // velocity may be a world-space vector or a speed in metres/second.
   update(dt, oldPos, newPos, velocity) {
     if (!(dt > 0) || !Number.isFinite(dt)) return;
@@ -58,7 +78,7 @@ export class PaintMeteor {
       const ball = this.balls[i];
       ball.age += dt;
       ball.paintTime += dt;
-      if (this.onPaint && ball.paintTime >= 0.15) {
+      if (!ball.visualOnly && this.onPaint && ball.paintTime >= 0.15) {
         ball.paintTime = 0;
         this.onPaint(ball.position, ball.radius, ball.color);
       }
@@ -68,7 +88,7 @@ export class PaintMeteor {
         const travel = Math.min(dt, Math.max(0, SHOT_TIME - ball.shotTime));
         ball.position.addScaledVector(ball.forward, SHOT_SPEED * travel);
         ball.shotTime += dt;
-        this.tornado?.hitByPaintBall?.(ball, previous, ball.position);
+        if (!ball.visualOnly) this.tornado?.hitByPaintBall?.(ball, previous, ball.position);
         if (playerPath && this.crossed(ball, oldPos, playerPath, previous)) {
           if (finiteVector(velocity)) ball.velocity.set(velocity.x, velocity.y, velocity.z);
           else if (typeof velocity === 'number' && Number.isFinite(velocity) && playerPath.lengthSq() > 1e-8)
@@ -86,7 +106,7 @@ export class PaintMeteor {
         ball.position.addScaledVector(ball.velocity, dt);
         ball.position.y -= 0.5 * GRAVITY * dt * dt;
         ball.velocity.y -= GRAVITY * dt;
-        this.tornado?.hitByPaintBall?.(ball, previous, ball.position);
+        if (!ball.visualOnly) this.tornado?.hitByPaintBall?.(ball, previous, ball.position);
         if (previousY > ball.radius && ball.position.y <= ball.radius) {
           const fraction = (previousY - ball.radius) / Math.max(previousY - ball.position.y, 1e-8);
           ball.position.x -= ball.velocity.x * dt * (1 - fraction);
@@ -127,8 +147,10 @@ export class PaintMeteor {
   startImpact(ball) {
     const center = new THREE.Vector3(ball.position.x, 0, ball.position.z);
     const radius = ball.radius * 2.5;
-    this.onPaint?.(center, radius, ball.color);
-    this.impacts.push({ center, radius, slice: 0 });
+    if (!ball.visualOnly) {
+      this.onPaint?.(center, radius, ball.color);
+      this.impacts.push({ center, radius, slice: 0 });
+    }
     this.effects.burst(center, radius, ball.color, ball.velocity);
     this.fx?.explosion?.(new THREE.Vector3(center.x, 2, center.z), Math.min(15, radius * 0.3));
     this.fx?.bigDust?.(center, 18);

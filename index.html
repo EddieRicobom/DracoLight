@@ -16,6 +16,8 @@
   .bar i{display:block;height:100%;width:100%;transition:width .15s}
   #hpP i{background:linear-gradient(90deg,#9f3430,#e85a42,#ffbd71)}
   #stP i{background:linear-gradient(90deg,#c87936,#ffd57b)}
+  #inkP i{background:linear-gradient(90deg,#2b5d8a,#7fd7ff)}
+  #inkBar[hidden]{display:none}
   #hpE i{background:linear-gradient(90deg,#50aeb3,#d1f6e9)}
   #cross{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;border:1.5px solid rgba(255,230,200,.7);border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,.6)}
   #cross:after{content:"";position:absolute;left:50%;top:50%;width:3px;height:3px;margin:-1.5px;background:#ffe9cf;border-radius:50%}
@@ -48,6 +50,8 @@
   #destructionChain{margin-top:4px;font-size:.9em;letter-spacing:.04em;color:#ffaf9e;font-variant-numeric:tabular-nums}
   #abilityHud{margin-top:4px;font-size:11px;letter-spacing:.03em;text-transform:none}
   #abilityHud:empty{display:none}
+  #inkNotice{margin-top:4px;font-size:11px;letter-spacing:.03em;text-transform:none;color:#9fe8ff}
+  #inkNotice:empty{display:none}
   #relicHud{margin-top:6px;padding-top:6px;border-top:1px solid #ffffff33;font-size:11px;letter-spacing:.02em;text-transform:none;color:#f5f5f5;font-variant-numeric:tabular-nums}
   #relicBearing{display:inline-block;margin-right:4px}
   #relicBearing[hidden]{display:none}
@@ -197,8 +201,8 @@
 <canvas id="c"></canvas>
 <button id="sound" type="button" aria-pressed="true">Som: ligado</button>
 <div id="hud">
-  <div class="bars"><div class="lbl">Impulso</div><div class="bar" id="stP"><i></i></div></div>
-  <div id="score">Destruição<br><b id="sc">0</b><div id="destructionChain" hidden></div><div id="abilityHud"></div>
+  <div class="bars"><div class="lbl">Impulso</div><div class="bar" id="stP"><i></i></div><div id="inkBar" hidden><div class="lbl">Tinta Viva</div><div class="bar" id="inkP"><i></i></div></div></div>
+  <div id="score">Destruição<br><b id="sc">0</b><div id="destructionChain" hidden></div><div id="abilityHud"></div><div id="inkNotice" role="status"></div>
     <div id="relicHud">
       <div id="relicCount"></div>
       <div><span id="relicBearing" hidden aria-hidden="true">↑</span><span id="relicHint"></span></div>
@@ -281,7 +285,7 @@
     <label for="characterSelect">Escolha seu personagem</label>
     <select id="characterSelect" aria-describedby="characterDescription"></select>
     <p id="characterDescription"></p>
-    <p>Habilidade: botão direito do mouse, X no controle ou botão Habilidade no celular.</p>
+    <p>Habilidade: botão direito do mouse, X no controle ou botão Habilidade no celular. Cada animal pinta com um traço próprio; feche um laço sobre o próprio rastro para ganhar ímpeto. Corra contra uma parede com Shift para abrir uma passagem. Ao encher a Tinta Viva, a próxima habilidade vira uma Obra-prima e chama um cometa de tinta.</p>
   </fieldset>
   <button id="switchCharacter" type="button">Jogar como personagem</button>
   <section class="coop-panel" aria-label="Cooperativo">
