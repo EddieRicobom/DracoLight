@@ -34,6 +34,7 @@
   #menu h2{margin:10px 0 26px;font:500 13px/1.4 system-ui;letter-spacing:.32em;text-transform:uppercase;opacity:.8}
   #menu p{max-width:560px;font-size:14px;line-height:1.6;opacity:.85;margin:0 16px 20px}
   .keys{display:grid;grid-template-columns:auto auto;gap:6px 18px;font-size:13px;text-align:left;margin-bottom:28px}
+  .keys[hidden]{display:none}
   .keys kbd{display:inline-block;min-width:18px;padding:2px 7px;border:1px solid rgba(243,217,189,.35);border-radius:5px;background:rgba(255,255,255,.06);font:600 11px/1.4 system-ui;text-align:center}
   #go{pointer-events:auto;font:700 13px/1 system-ui;letter-spacing:.24em;text-transform:uppercase;color:#24373a;background:linear-gradient(#ffe1a0,#f6a65f);border:0;border-radius:999px;padding:15px 34px;cursor:pointer;box-shadow:0 0 30px rgba(246,166,95,.32)}
   #go:hover{filter:brightness(1.1)}
@@ -226,7 +227,7 @@
   <h2 id="sub">Draco Light · voo livre</h2>
   <p id="msg">Voe livremente pela cidade, atravesse prédios e suba até a estratosfera. Sem inimigos: escolha seu próprio caminho.</p>
   <button id="go">Carregando…</button>
-  <div class="keys">
+  <div class="keys" id="flightKeys">
     <span><kbd>Mouse</kbd> / <kbd>Analógico dir.</kbd></span><span>direção do voo</span>
     <span><kbd>W</kbd> <kbd>S</kbd></span><span>acelerar / frear</span>
     <span><kbd>A</kbd> <kbd>D</kbd></span><span>desviar para os lados</span>
@@ -235,8 +236,16 @@
     <span><kbd>Mouse direito</kbd> / <kbd>X</kbd></span><span>disparar bola de tinta</span>
     <span><kbd>Esc</kbd></span><span>pausar</span>
   </div>
+  <div class="keys" id="groundKeys" hidden>
+    <span><kbd>Mouse</kbd> / <kbd>Analógico dir.</kbd></span><span>girar a câmera</span>
+    <span><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></span><span>correr em relação à câmera</span>
+    <span><kbd>Espaço</kbd></span><span>pular; avance contra uma parede para escalá-la</span>
+    <span><kbd>Shift</kbd></span><span>impulso / atravessar paredes</span>
+    <span id="animalAbilityKeys"><kbd>E</kbd> / <kbd>Mouse direito</kbd> / <kbd>X</kbd></span><span id="animalAbilityHelp">usar habilidade do animal</span>
+    <span><kbd>Esc</kbd></span><span>pausar</span>
+  </div>
   <p class="desktop-help">Controle: analógico esquerdo movimenta · gatilho direito impulsiona · Start pausa.</p>
-  <p class="mobile-help">Use os direcionais de toque para voar e toque em Tinta para disparar. Toque em pausa para escolher a cor.</p>
+  <p class="mobile-help" id="mobileHelp">Use os direcionais de toque para voar e toque em Tinta para disparar. Toque em pausa para escolher a cor.</p>
   <fieldset class="paint" id="paintControls">
     <legend>Tinta</legend>
     <p>Atravesse a bola de tinta para criar um meteoro. Voe em círculos para criar um tornado de tinta.</p>

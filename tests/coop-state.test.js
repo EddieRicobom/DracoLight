@@ -75,6 +75,7 @@ test('requires the connected guest to be playing the requested destructive speci
 test('checks three-dimensional distance and the host impact interval', () => {
   const edge = { ...impactPacket, p: [10, 45, 10] };
   assert.ok(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.94 }));
+  assert.ok(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.95 }));
   assert.equal(readCoopZodiacImpact({ ...edge, p: [11, 45, 10] }, impactContext), null);
   assert.equal(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.96 }), null);
 });
@@ -100,6 +101,7 @@ test('dog scent path is bounded and accepted as a single cooperative event', () 
   const message = { type: 'zodiac-scent', p: [10, 0, 20], yaw: 0.5, distance: 42, color: '#ef4444' };
   const context = { remote: { mode: 'human', species: 'dog', target: { x: 10, y: 0, z: 20 } }, elapsed: 7 };
   assert.deepEqual(readCoopZodiacScent(message, context), { p: message.p, yaw: 0.5, distance: 42, color: '#ef4444' });
+  assert.ok(readCoopZodiacScent(message, { ...context, lastScentAt: 6.7 }));
   assert.equal(readCoopZodiacScent({ ...message, distance: 43 }, context), null);
   assert.equal(readCoopZodiacScent(message, { ...context, lastScentAt: 6.8 }), null);
   assert.equal(readCoopZodiacScent(message, { ...context, remote: { mode: 'human', species: 'dog' } }), null);
@@ -111,6 +113,7 @@ test('accepts a nearby guest brushstroke with its own colour and size', () => {
     species: 'rabbit', p: [10, 0.7, 25], yaw: 0.5, scale: 1.2, color: '#ef4444',
   });
   assert.ok(readCoopZodiacPaint({ ...paintPacket, scale: 2.6 }, paintContext));
+  assert.ok(readCoopZodiacPaint(paintPacket, { ...paintContext, lastPaintAt: 6.9 }));
 });
 
 const markPacket = {
@@ -148,6 +151,7 @@ test('accepts guest wall breaches and comets near the sending character', () => 
     species: 'rabbit', kind: 'breach', p: [10, 2, 25], yaw: 0.5, color: '#ef4444',
   });
   assert.ok(readCoopZodiacBurst({ ...burstPacket, kind: 'comet' }, burstContext));
+  assert.ok(readCoopZodiacBurst(burstPacket, { ...burstContext, elapsed: 1, lastBurstAt: 0.8 }));
 });
 
 test('rejects unknown burst kinds, distant targets and malformed fields', () => {

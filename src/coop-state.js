@@ -53,7 +53,7 @@ export function readCoopZodiacImpact(message, { remote, elapsed, lastImpactAt = 
   if (message?.type !== 'zodiac-impact' || remote?.mode !== 'human') return null;
   const { species, p } = message;
   if (typeof species !== 'string' || species !== remote.species || !Object.hasOwn(ZODIAC_IMPACTS, species)) return null;
-  if (!isWorldPosition(p) || !Number.isFinite(elapsed) || elapsed - lastImpactAt < IMPACT_INTERVAL) return null;
+  if (!isWorldPosition(p) || !Number.isFinite(elapsed) || !(elapsed >= lastImpactAt + IMPACT_INTERVAL)) return null;
 
   const dx = p[0] - remote.target?.x;
   const dy = p[1] - remote.target?.y;
@@ -70,7 +70,7 @@ export function readCoopZodiacPaint(message, {
   if (message?.type !== 'zodiac-paint' || remote?.mode !== 'human') return null;
   const { species, p, scale, color } = message;
   if (typeof species !== 'string' || species !== remote.species || !Object.hasOwn(ZODIAC_INK, species)) return null;
-  if (!isWorldPosition(p) || !Number.isFinite(elapsed) || elapsed - lastPaintAt < interval) return null;
+  if (!isWorldPosition(p) || !Number.isFinite(elapsed) || !(elapsed >= lastPaintAt + interval)) return null;
   if (!Number.isFinite(message.yaw) || !Number.isFinite(scale) || scale <= 0 || scale > 4) return null;
   if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) return null;
   const dx = p[0] - remote.target?.x;
@@ -103,7 +103,7 @@ export function readCoopZodiacScent(message, { remote, elapsed, lastScentAt = -I
   const { p, yaw, distance, color } = message;
   if (!isWorldPosition(p) || !Number.isFinite(yaw) || !Number.isFinite(distance) || distance < 7 || distance > 42
       || typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)
-      || !Number.isFinite(elapsed) || elapsed - lastScentAt < 0.3) return null;
+      || !Number.isFinite(elapsed) || !(elapsed >= lastScentAt + 0.3)) return null;
   const dx = p[0] - remote.target?.x, dy = p[1] - remote.target?.y, dz = p[2] - remote.target?.z;
   if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return null;
   if (dx * dx + dy * dy + dz * dz > PAINT_DISTANCE * PAINT_DISTANCE) return null;
@@ -118,7 +118,7 @@ export function readCoopZodiacBurst(message, {
   const { species, p, kind, color } = message;
   if (typeof species !== 'string' || species !== remote.species || !Object.hasOwn(ZODIAC_INK, species)) return null;
   if (!BURST_KINDS.has(kind)) return null;
-  if (!isWorldPosition(p) || !Number.isFinite(elapsed) || elapsed - lastBurstAt < interval) return null;
+  if (!isWorldPosition(p) || !Number.isFinite(elapsed) || !(elapsed >= lastBurstAt + interval)) return null;
   if (!Number.isFinite(message.yaw)) return null;
   if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) return null;
   const dx = p[0] - remote.target?.x;

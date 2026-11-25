@@ -460,6 +460,15 @@ function setSpecies(id) {
 }
 function refreshCharacterUI() {
   characterSelect.value = playerMode === 'dragon' ? 'dragon' : activeSpecies;
+  $('flightKeys').hidden = playerMode !== 'dragon';
+  $('groundKeys').hidden = playerMode === 'dragon';
+  $('animalAbilityKeys').hidden = activeSpecies === 'boykisser';
+  $('animalAbilityHelp').hidden = activeSpecies === 'boykisser';
+  $('mobileHelp').textContent = playerMode === 'dragon'
+    ? 'Use os direcionais de toque para voar e toque em Tinta para disparar. Toque em pausa para escolher a cor.'
+    : activeSpecies === 'boykisser'
+      ? 'Use os direcionais para correr e girar a câmera. Toque em Pular para saltar; avance contra uma parede para escalá-la.'
+      : 'Use os direcionais para correr e girar a câmera. Toque em Pular para saltar; avance contra uma parede para escalá-la. Toque em Habilidade para usar o poder do animal.';
   $('characterDescription').textContent = playerMode === 'dragon'
     ? 'Voo livre, tinta, tornados e meteoros.'
     : activeSpecies === 'boykisser' ? 'Corre rápido e escala prédios.'

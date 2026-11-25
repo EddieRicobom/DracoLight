@@ -112,6 +112,14 @@ test('diagonal input does not exceed running speed', () => {
   player.dispose();
 });
 
+test('can jump on the first frame after teleporting to a clear street', () => {
+  const player = new Boykisser(new THREE.Scene(), testCity());
+  player.teleport(new THREE.Vector3(0, 40, 0), { ground: true });
+  assert.equal(player.update(0.05, { jump: true, sweep: true }), 'air');
+  assert.ok(player.position.y > 0);
+  player.dispose();
+});
+
 test('half stick input gives half speed and movement facing leaves the camera yaw intact', () => {
   const player = new Boykisser(new THREE.Scene(), testCity());
   const start = new THREE.Vector3(-20, 0, 20);
@@ -138,6 +146,35 @@ test('swept movement catches a thin barrier at high speed and lets a leap clear 
   player.teleport(new THREE.Vector3(), { yaw });
   player.update(0.05, { forward: 1, sprint: true, speedScale: 3, allowClimb: false, sweep: true });
   assert.ok(player.position.x < 2);
+  player.dispose();
+});
+
+test('swept movement lands on the higher roof edge and falls after clearing it', () => {
+  const city = testCity();
+  const raycast = city.raycast;
+  let rayCount = 0;
+  city.raycast = (origin, direction, maxDistance) => {
+    rayCount++;
+    if (origin.x >= 3 && origin.x < 5 && origin.y >= 5) {
+      const lowerRoofDistance = origin.y - 5;
+      if (lowerRoofDistance <= maxDistance) return lowerRoofDistance;
+    }
+    return raycast(origin, direction, maxDistance);
+  };
+  const player = new Boykisser(new THREE.Scene(), city);
+  const yaw = -Math.PI / 2;
+  player.teleport(new THREE.Vector3(0, 0, 0), { ground: true, yaw });
+  player.update(0.05, { sweep: true });
+  assert.equal(rayCount, 1);
+
+  player.teleport(new THREE.Vector3(4.6, 12, 0), { yaw });
+  player.update(0.05, { sweep: true, lift: -100 });
+  assert.ok(Math.abs(player.position.y - 10) < 0.001);
+  assert.equal(player.grounded, true);
+
+  player.update(0.05, { forward: 1, sweep: true });
+  assert.ok(player.position.y < 10);
+  assert.equal(player.grounded, false);
   player.dispose();
 });
 

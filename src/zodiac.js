@@ -70,8 +70,14 @@ function tint(shape, color) {
 }
 
 function ellipsoid(color, position, axes, tilt = 0, pitch = 0, detail = 9) {
-  return tint(new THREE.SphereGeometry(1, detail, Math.ceil(detail * 2 / 3))
-    .scale(...axes).rotateX(pitch).rotateZ(tilt).translate(...position), color);
+  const shape = tint(new THREE.SphereGeometry(1, detail, Math.ceil(detail * 2 / 3)), color);
+  const colors = shape.getAttribute('color');
+  const vertices = shape.getAttribute('position');
+  for (let i = 0; i < colors.count; i++) {
+    const shade = 0.9 + vertices.getY(i) * 0.1;
+    colors.setXYZ(i, colors.getX(i) * shade, colors.getY(i) * shade, colors.getZ(i) * shade);
+  }
+  return shape.scale(...axes).rotateX(pitch).rotateZ(tilt).translate(...position);
 }
 
 function segment(color, start, end, startRadius, endRadius) {
@@ -133,7 +139,19 @@ function quadrupedHead(id, { colors: [base, light, dark], head: [w, h, d] }) {
       );
     }
   };
-  for (const side of [-1, 1]) eye(parts, side * w * 0.77, h * 0.18, d * 0.64);
+  for (const side of [-1, 1]) {
+    const x = side * w * 0.77;
+    const y = h * 0.18;
+    const z = d * 0.64;
+    if (id === 'goat') {
+      parts.push(
+        ellipsoid(0xcd9d47, [x, y, z], [0.058, 0.053, 0.051]),
+        ellipsoid(EYE, [x + side * 0.025, y, z + 0.04], [0.037, 0.016, 0.017], 0, 0, 6),
+      );
+    } else {
+      eye(parts, x, y, z);
+    }
+  }
 
   switch (id) {
     case 'rat':
@@ -143,11 +161,15 @@ function quadrupedHead(id, { colors: [base, light, dark], head: [w, h, d] }) {
         parts.push(
           ellipsoid(IVORY, [side * 0.032, -0.21, 0.44], [0.03, 0.062, 0.03], 0, 0, 6),
           segment(light, [side * 0.105, -0.1, 0.4], [side * 0.34, -0.075, 0.44], 0.021, 0.007),
+          segment(light, [side * 0.12, -0.126, 0.39], [side * 0.31, -0.158, 0.46], 0.015, 0.005),
         );
       }
       break;
     case 'ox':
-      parts.push(ellipsoid(light, [0, -0.18, 0.29], [0.39, 0.19, 0.255]));
+      parts.push(
+        ellipsoid(light, [0, -0.18, 0.29], [0.39, 0.19, 0.255]),
+        ellipsoid(dark, [0, 0.302, 0.22], [0.19, 0.095, 0.18], 0, 0.44, 7),
+      );
       for (const side of [-1, 1]) {
         parts.push(
           ellipsoid(dark, [side * 0.46, 0.08, -0.03], [0.23, 0.09, 0.12], side * -0.15),
@@ -178,6 +200,9 @@ function quadrupedHead(id, { colors: [base, light, dark], head: [w, h, d] }) {
       }
       muzzle(parts, light, 0.19, 0.17, dark);
       parts.push(ellipsoid(IVORY, [0, -0.25, 0.36], [0.055, 0.055, 0.035]));
+      for (const side of [-1, 1]) {
+        parts.push(ellipsoid(light, [side * 0.233, -0.151, 0.202], [0.116, 0.116, 0.13], side * 0.32, 0, 7));
+      }
       break;
     case 'horse':
       ears(0.178, 0.26, 0.084, 0.205, -0.12);
@@ -199,7 +224,10 @@ function quadrupedHead(id, { colors: [base, light, dark], head: [w, h, d] }) {
     case 'dog':
       muzzle(parts, light, 0.235, 0.24);
       for (const side of [-1, 1]) {
-        parts.push(ellipsoid(dark, [side * 0.355, -0.065, -0.025], [0.14, 0.345, 0.145], side * 0.32, -0.31));
+        parts.push(
+          ellipsoid(dark, [side * 0.355, -0.065, -0.025], [0.14, 0.345, 0.145], side * 0.32, -0.31),
+          ellipsoid(light, [side * 0.267, 0.146, 0.221], [0.063, 0.025, 0.033], side * -0.3, 0, 6),
+        );
       }
       parts.push(ellipsoid(light, [0, 0.11, 0.29], [0.06, 0.16, 0.04]));
       break;
@@ -209,6 +237,7 @@ function quadrupedHead(id, { colors: [base, light, dark], head: [w, h, d] }) {
           segment(base, [side * 0.25, 0.22, -0.05], [side * 0.39, 0.55, -0.09], 0.135, 0.02),
           ellipsoid(dark, [side * 0.31, 0.32, 0.035], [0.06, 0.14, 0.024], side * -0.32),
           ellipsoid(dark, [side * 0.08, -0.09, 0.557], [0.04, 0.05, 0.025]),
+          ellipsoid(0xd7868c, [side * 0.326, -0.124, 0.231], [0.056, 0.071, 0.088], 0, 0, 6),
         );
       }
       parts.push(ellipsoid(light, [0, -0.13, 0.405], [0.267, 0.185, 0.166]));
@@ -249,6 +278,9 @@ function quadruped(body, material, id, definition) {
   } else if (id === 'horse') {
     hull.push(ellipsoid(base, [0, 1.57, 0.54], [0.29, 0.61, 0.29], 0, 0.38));
     chain(hull, dark, [[0, 2.12, 0.66], [0.045, 1.94, 0.41], [-0.055, 1.65, 0.24], [0.05, 1.49, 0.04]], [0.11, 0.172, 0.147, 0.023]);
+    hull.push(ellipsoid(dark, [0.18, 1.76, 0.34], [0.08, 0.28, 0.13], 0.19, 0.43, 7));
+  } else if (id === 'goat') {
+    hull.push(ellipsoid(light, [0, bodyY - 0.03, 0.48], [0.25, 0.33, 0.22], 0, 0.19, 7));
   } else if (id === 'dog') {
     hull.push(ellipsoid(dark, [0, bodyY + 0.18, -0.17], [0.382, 0.266, 0.432], 0, 0.13));
   }
@@ -283,7 +315,17 @@ function quadruped(body, material, id, definition) {
     const parts = [];
     const radius = id === 'horse' ? 0.14 : id === 'tiger' || id === 'dog' ? 0.097 : 0.055;
     const tailColor = id === 'rat' || id === 'pig' || id === 'horse' ? dark : base;
-    chain(parts, tailColor, definition.tail, definition.tail.map((_, i) => radius * (1 - i / definition.tail.length)));
+    const radii = definition.tail.map((_, i) => radius * (1 - i / definition.tail.length));
+    chain(parts, tailColor, definition.tail, radii);
+    if (id === 'tiger') {
+      for (let i = 1; i < definition.tail.length; i++) {
+        const start = V(definition.tail[i - 1]);
+        const end = V(definition.tail[i]);
+        parts.push(segment(dark, start.clone().lerp(end, 0.38).toArray(), start.lerp(end, 0.62).toArray(),
+          THREE.MathUtils.lerp(radii[i - 1], radii[i], 0.38) * 1.06,
+          THREE.MathUtils.lerp(radii[i - 1], radii[i], 0.62) * 1.06));
+      }
+    }
     if (id === 'ox' || id === 'tiger') parts.push(ellipsoid(dark, definition.tail.at(-1), [radius * 1.3, radius * 1.65, radius * 1.3]));
     attach(tail, parts, material);
   } else {
@@ -314,6 +356,7 @@ function monkey(body, material) {
     skull.push(
       ellipsoid(fur, [side * 0.41, 0.03, 0], [0.14, 0.157, 0.11]),
       ellipsoid(face, [side * 0.43, 0.03, 0.075], [0.102, 0.106, 0.052]),
+      ellipsoid(face, [side * 0.128, 0.112, 0.265], [0.131, 0.128, 0.134], side * 0.25, 0, 7),
     );
     eye(skull, side * 0.147, 0.045, 0.395);
     const arm = pivot(body, [side * 0.3, 1.31, 0]);
@@ -370,6 +413,7 @@ function rooster(body, material) {
       ellipsoid(plumage, [side * 0.25, -0.04, 0], [0.33, 0.15, 0.17], side * -0.18),
       ellipsoid(tailColor, [side * 0.51, -0.08, -0.065], [0.26, 0.065, 0.14], side * -0.18),
       ellipsoid(feathersBlue, [side * 0.44, -0.09, -0.18], [0.24, 0.06, 0.11], side * -0.18),
+      ellipsoid(chest, [side * 0.29, 0.063, -0.029], [0.208, 0.041, 0.109], side * -0.16, 0, 7),
     ], material);
     wing.rotation.y = side * 1.31;
     arms.push({ joint: wing, side });
@@ -401,8 +445,17 @@ function snake(body, material) {
   const bodyParts = [];
   const neckBase = [-0.32, 0.2, -0.12];
   const tail = pivot(body, neckBase);
-  const curve = [[1.05, -0.065, -0.38], [0.94, -0.055, -0.6], [0.6, -0.05, -0.78], [0.15, -0.056, -0.75], [-0.19, -0.058, -0.46], [0, 0, 0]];
-  chain(bodyParts, back, curve, [0.015, 0.056, 0.092, 0.121, 0.145, 0.165]);
+  const joint = [0.6, -0.05, -0.78];
+  const tip = pivot(tail, joint);
+  const curl = [];
+  chain(curl, back, [[0, 0, 0], [0.34, -0.005, 0.18], [0.45, -0.015, 0.4]], [0.092, 0.056, 0.015]);
+  attach(tip, curl, material);
+  chain(bodyParts, back, [joint, [0.15, -0.056, -0.75], [-0.19, -0.058, -0.46], [0, 0, 0]], [0.092, 0.121, 0.145, 0.165]);
+  bodyParts.push(
+    ellipsoid(back, joint, [0.092, 0.092, 0.092], 0, 0, 6),
+    ellipsoid(marking, [0.18, 0.058, -0.735], [0.08, 0.029, 0.06], 0, 0, 6),
+    ellipsoid(marking, [-0.173, 0.082, -0.475], [0.067, 0.037, 0.071], 0, 0, 6),
+  );
   attach(tail, bodyParts, material);
 
   const neck = pivot(body, neckBase);
@@ -426,7 +479,7 @@ function snake(body, material) {
     eye(crown, side * 0.207, 0.165, 0.354, 0.067);
   }
   attach(head, crown, material);
-  return { head, neck, tail, legs: [], gait: 'slither' };
+  return { head, neck, tail, tip, legs: [], gait: 'slither' };
 }
 
 const BUILDERS = { monkey, rooster, snake };
@@ -467,6 +520,8 @@ export function createZodiacAvatar(id, { height = 3.4 } = {}) {
   let idlePhase = 0;
   let effort = 0;
   let power = 0;
+  let fallingSpeed = 0;
+  let landing = 0;
 
   function animate(dt, { state = 'idle', speed = 0, verticalSpeed = 0, ability = '' } = {}) {
     const climbing = state === 'climb';
@@ -475,15 +530,28 @@ export function createZodiacAvatar(id, { height = 3.4 } = {}) {
     const energetic = state === 'run' || Boolean(ability);
     effort = THREE.MathUtils.damp(effort, moving ? (energetic ? 1 : 0.63) : 0, 14, dt);
     power = THREE.MathUtils.damp(power, ability ? 1 : 0, 17, dt);
+    landing = THREE.MathUtils.damp(landing, 0, 14, dt);
+    if (airborne) {
+      fallingSpeed = Math.max(0, -verticalSpeed);
+      landing = 0;
+    } else {
+      if (!climbing && fallingSpeed > 5) landing = Math.min(fallingSpeed / 36, 1);
+      fallingSpeed = 0;
+    }
     if (moving || effort > 0.015) phase += dt * cadence * (5 + Math.min(Math.abs(speed), 55) * 0.28);
     idlePhase += dt * 2.8;
     const wave = Math.sin(phase);
     const idleWave = Math.sin(idlePhase);
+    const breathing = airborne || climbing ? 0 : (idleWave * 0.5 + 0.5) * (1 - effort);
+    const rising = THREE.MathUtils.clamp(verticalSpeed / 18, 0, 1);
+    const falling = THREE.MathUtils.clamp(-verticalSpeed / 28, 0, 1);
     const bounding = rig.gait === 'bound' && !climbing && (energetic || id === 'rabbit');
     const galloping = rig.gait === 'gallop' && energetic && !climbing;
     const stride = maxSwing * effort;
     const pulse = bounding || galloping ? (1 - Math.cos(phase)) * 0.5 : Math.abs(wave);
-    body.position.y = floor + (airborne || climbing ? 0 : pulse * bounce * effort);
+    const compression = landing * (id === 'pig' ? 0.21 : id === 'ox' ? 0.115 : 0.15);
+    body.scale.set(1 + compression * 0.28, 1 + breathing * 0.018 - compression, 1 + compression * 0.34);
+    body.position.y = floor * body.scale.y + (airborne || climbing ? 0 : pulse * bounce * effort * (1 - landing));
     body.rotation.x = airborne ? -THREE.MathUtils.clamp(verticalSpeed * 0.026, -0.29, 0.29) : wave * effort * (bounding || galloping ? 0.1 : 0.035);
     body.rotation.z = airborne ? 0 : wave * effort * sway;
     if (climbing) body.rotation.x -= 0.15 + (id === 'goat' ? 0.15 * power : 0);
@@ -492,17 +560,27 @@ export function createZodiacAvatar(id, { height = 3.4 } = {}) {
 
     switch (id) {
       case 'rat':
-        body.rotation.x += 0.12 * power;
+        body.rotation.x += 0.16 * power;
+        rig.head.rotation.x -= 0.08 * power;
         break;
       case 'ox':
         body.rotation.x += 0.08 * power;
         rig.head.rotation.x += 0.31 * power;
         break;
       case 'tiger':
-        if (airborne) body.rotation.x -= 0.14 * power;
+        if (airborne) {
+          body.rotation.x -= 0.14 * power;
+          body.scale.z = 1 + power * rising * 0.11;
+        }
+        break;
+      case 'rabbit':
+        rig.head.rotation.x += airborne ? -0.22 * rising + 0.17 * falling : wave * effort * 0.12;
         break;
       case 'horse':
         rig.head.rotation.x -= wave * effort * 0.12;
+        break;
+      case 'goat':
+        rig.head.rotation.x -= climbing ? 0.14 + 0.2 * power : 0;
         break;
       case 'rooster':
         rig.head.rotation.x += Math.sin(phase * 2) * effort * 0.1;
@@ -512,15 +590,15 @@ export function createZodiacAvatar(id, { height = 3.4 } = {}) {
         rig.head.rotation.y += Math.sin(idlePhase * 2) * 0.18 * power;
         break;
       case 'pig':
-        if (airborne && verticalSpeed < 0) body.rotation.x += 0.23 * power;
+        if (airborne) body.rotation.x += falling * 0.42 * power;
         break;
     }
     for (const { joint, side, rear } of rig.legs) {
       if (airborne) {
-        if (id === 'rabbit') joint.rotation.x = rear ? 0.74 + 0.16 * power : -0.71;
+        if (id === 'rabbit') joint.rotation.x = rear ? 0.33 + 0.62 * rising + 0.16 * power : -0.71 + 0.36 * falling;
         else if (id === 'pig') joint.rotation.x = (rear ? 0.31 : -0.31) * (1 - power * 0.65);
-        else if (id === 'rooster') joint.rotation.x = 0.64;
-        else joint.rotation.x = rear ? 0.49 : -0.46 - (id === 'tiger' ? 0.33 * power : 0);
+        else if (id === 'rooster') joint.rotation.x = 0.64 * (1 - falling * 0.7);
+        else joint.rotation.x = rear ? 0.22 + 0.38 * rising : -0.46 + 0.31 * falling - (id === 'tiger' ? 0.33 * power : 0);
         joint.rotation.z = 0;
         continue;
       }
@@ -528,6 +606,7 @@ export function createZodiacAvatar(id, { height = 3.4 } = {}) {
       if (bounding) offset = (rear ? Math.PI : 0) + (id === 'rabbit' ? 0 : side * 0.25);
       if (galloping) offset = (rear ? 2.8 : 0) + side * 0.56;
       joint.rotation.x = Math.sin(phase + offset) * stride * (id === 'rabbit' && rear ? 1.32 : 1);
+      if (climbing) joint.rotation.x -= rear ? 0.05 : 0.26 + (id === 'goat' ? 0.19 * power : 0);
       joint.rotation.z = id === 'pig' ? side * wave * effort * 0.08 : 0;
     }
     for (const { joint, side } of rig.arms ?? []) {
@@ -537,7 +616,8 @@ export function createZodiacAvatar(id, { height = 3.4 } = {}) {
         const flap = Math.sin(idlePhase * 3.5) * (0.27 - power * 0.17);
         joint.rotation.z = side * (spread * (0.09 + flap) + wave * stride * 0.25 * (1 - spread));
       } else {
-        joint.rotation.x = airborne ? -0.73 - power * (0.63 + side * 0.16) : -wave * stride * side * 1.24;
+        joint.rotation.x = airborne ? -0.58 - rising * 0.24 - power * (0.63 + side * 0.16) : -wave * stride * side * 1.24;
+        if (climbing) joint.rotation.x -= 0.62;
         joint.rotation.z = side * (airborne ? 0.13 : effort * 0.07);
       }
     }
@@ -552,7 +632,9 @@ export function createZodiacAvatar(id, { height = 3.4 } = {}) {
       rig.head.rotation.y = -rig.neck.rotation.y * 0.78;
       rig.tail.rotation.y = Math.sin(phase - 1.2) * slither * 0.82 + idleWave * 0.052;
       rig.tail.rotation.x = 0;
-      body.position.x = wave * effort * 0.12;
+      rig.tip.rotation.y = Math.sin(phase - 2.25) * slither + Math.sin(idlePhase - 0.75) * 0.065;
+      rig.neck.rotation.x = -rising * 0.14 + falling * 0.16;
+      body.position.x = airborne ? 0 : wave * effort * 0.12;
     }
   }
 

@@ -66,7 +66,28 @@ test('ground movement keeps visible differences in each species’ gait', () => 
   assert.notEqual(snakeTail.rotation.y, 0);
   assert.notEqual(snakeNeck.rotation.y, 0);
   assert.notEqual(snakeTail.rotation.y, snakeNeck.rotation.y);
+  const [snakeTip] = snakeTail.children;
+  assert.notEqual(snakeTip.rotation.y, 0);
+  assert.notEqual(snakeTip.rotation.y, snakeTail.rotation.y);
   for (const avatar of [rabbit, horse, snake]) avatar.dispose();
+});
+
+test('the rabbit changes its jump pose on descent and recovers after landing', () => {
+  const rabbit = createZodiacAvatar('rabbit');
+  const [body] = rabbit.root.children;
+  const rearLeg = body.children[4];
+  rabbit.animate(0.05, { state: 'air', verticalSpeed: 18 });
+  const jumpAngle = rearLeg.rotation.x;
+  rabbit.animate(0.05, { state: 'air', verticalSpeed: -28 });
+  assert.ok(rearLeg.rotation.x < jumpAngle);
+  assert.equal(body.scale.y, 1);
+
+  rabbit.animate(0.05, { state: 'idle' });
+  assert.ok(body.scale.y < 0.92);
+  rabbit.animate(0.3, { state: 'idle' });
+  assert.ok(body.scale.y > 0.99);
+  assert.ok(Math.abs(new Box3().setFromObject(rabbit.root).min.y) < 1e-9);
+  rabbit.dispose();
 });
 
 test('ability poses open the rooster’s wings and lower the dog’s nose', () => {

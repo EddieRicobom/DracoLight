@@ -2,14 +2,14 @@ import * as THREE from 'three';
 
 export const ZODIAC_ABILITIES = Object.freeze({
   rat: { name: 'Esquiva', description: 'Dispare na direção em que estiver se movendo.', duration: 0.3, cooldown: 2.1 },
-  ox: { name: 'Investida', description: 'Avance e abra uma passagem na primeira parede que atingir.', duration: 0.95, cooldown: 4.1 },
-  tiger: { name: 'Bote', description: 'Salte à frente e quebre blocos ao aterrissar.', duration: 4.5, cooldown: 5 },
+  ox: { name: 'Investida', description: 'Escolha a direção, faça curvas suaves e abra uma passagem na primeira parede que atingir.', duration: 0.95, cooldown: 4.1 },
+  tiger: { name: 'Bote', description: 'Salte à frente e quebre blocos ao aterrissar. Aperte pular no ar para mergulhar mais cedo.', duration: 4.5, cooldown: 5 },
   rabbit: { name: 'Salto Triplo', description: 'Aperte até três vezes em sequência para saltar de novo no ar.', duration: 1.65, cooldown: 3.3 },
   snake: { name: 'Serpenteio', description: 'Ganhe agilidade lateral e deslize pelos cantos das paredes.', duration: 2.2, cooldown: 4 },
   horse: { name: 'Galope', description: 'Ganhe velocidade em terreno livre. Frear ou bater numa parede reduz o embalo.', duration: 2.6, cooldown: 4.5 },
   goat: { name: 'Escalada Alpina', description: 'Corra contra uma parede para subi-la muito mais depressa.', duration: 3, cooldown: 4.6 },
   monkey: { name: 'Salto de Fachada', description: 'Mire uma fachada próxima e, ao alcançá-la, aperte pular para se impulsionar para longe da parede.', duration: 1.45, cooldown: 4 },
-  rooster: { name: 'Planeio', description: 'Abra as asas para planar e aperte pular até três vezes para bater asas.', duration: 2.5, cooldown: 4.7 },
+  rooster: { name: 'Planeio', description: 'Plane no ar e aperte pular até três vezes para ganhar altura e impulso na direção do movimento.', duration: 2.5, cooldown: 4.7 },
   dog: { name: 'Faro', description: 'Ganhe velocidade e siga o rastro da relíquia mais próxima a até 1.100 m.', duration: 7, cooldown: 9 },
   pig: { name: 'Baque', description: 'Role e dê um pulo se estiver no chão, ou mergulhe se estiver no ar. Esmague a área ao aterrissar.', duration: 6, cooldown: 6.5 },
 });
@@ -24,6 +24,9 @@ const RABBIT_INTERVAL = 0.21;
 const RABBIT_INPUT_BUFFER = 0.07;
 const RAT_MIN_DIRECTION = 0.12;
 const WALL_KICK_PUSH_TIME = 0.16;
+const WALL_REBOUND_BUFFER = 0.16;
+const FLAP_BOOST_TIME = 0.22;
+const CHARGE_PROBE_SIDES = [0, -1, 1];
 const DOG_SCENT_RANGE = 1100;
 const PIG_ROLL_TIME = 0.36;
 const directionAt = (vector, yaw) => vector.set(Math.sin(yaw), 0, Math.cos(yaw));
@@ -78,12 +81,15 @@ export class ZodiacAbilities {
     this.gallop = 0;
     this.sawAirborne = false;
     this.spentImpact = false;
+    this.diving = false;
     this.clawed = false;
     this.endInk = false;
     this.rolling = false;
     this.vaulting = false;
     this.flaps = 0;
     this.nextFlap = 0;
+    this.flapBoostUntil = 0;
+    this.reboundUntil = 0;
     this.wallKickAt = 0;
     this.wallKickUntil = 0;
     this.wallKickYaw = 0;
@@ -94,8 +100,13 @@ export class ZodiacAbilities {
     return this.time < this.endsAt;
   }
 
+  get canChainRabbitHop() {
+    return this.id === 'rabbit' && this.active && this.hops < 3
+      && this.hopAt + RABBIT_INTERVAL < this.endsAt;
+  }
+
   get remaining() {
-    if (this.id === 'rabbit' && this.active && this.hops < 3) {
+    if (this.canChainRabbitHop) {
       return Math.max(0, this.hopAt + RABBIT_INTERVAL - this.time);
     }
     return Math.max(0, Math.max(this.endsAt, this.readyAt.get(this.id) ?? 0) - this.time);
@@ -123,7 +134,7 @@ export class ZodiacAbilities {
 
   activate(actor, yaw = actor.yaw) {
     if (!this.id || this.pendingYaw !== null) return false;
-    const buffer = this.id === 'rabbit' && this.active && this.hops < 3 ? RABBIT_INPUT_BUFFER : 0;
+    const buffer = this.canChainRabbitHop ? RABBIT_INPUT_BUFFER : 0;
     if (this.remaining > buffer) return false;
     this.pendingYaw = yaw;
     return true;
@@ -163,17 +174,21 @@ export class ZodiacAbilities {
       this.gallop = 0;
       this.sawAirborne = false;
       this.spentImpact = false;
+      this.diving = false;
       this.clawed = false;
       this.endInk = false;
       this.rolling = false;
       this.vaulting = false;
       this.flaps = 0;
       this.nextFlap = 0;
+      this.flapBoostUntil = 0;
+      this.reboundUntil = 0;
       this.wallKickUntil = 0;
       this.stamps = [];
     }
     switch (this.id) {
       case 'rat':
+      case 'ox':
         this.heading = movementYaw(input, yaw);
         break;
       case 'tiger':
@@ -230,7 +245,7 @@ export class ZodiacAbilities {
     const stride = speed * flow * dt + 0.3;
     let nearest = Infinity;
     // Trace from the centre and each side of the body so a corner hit also opens a passage.
-    for (const side of [0, -1, 1]) {
+    for (const side of CHARGE_PROBE_SIDES) {
       this.wallProbe.copy(human.position).y += human.height * 0.5;
       this.wallProbe.x -= direction.z * side * human.radius;
       this.wallProbe.z += direction.x * side * human.radius;
@@ -287,15 +302,24 @@ export class ZodiacAbilities {
         motion.slide = true;
         break;
       case 'ox':
+        this.heading = steer(this.heading, moveHeading, (this.spentImpact ? 2.2 : 1.3) * dt);
         this._charge(dt, human, motion, flow);
         break;
       case 'tiger':
-        if (progress < 0.75) {
+        if (jumpPressed && this.sawAirborne && progress >= 0.16 && !this.diving) {
+          this.diving = true;
+        }
+        if (this.diving) {
+          this.heading = steer(this.heading, moveHeading, 3.4 * dt);
+          this._dash(motion, 0.82);
+          motion.lift = Math.min(human.velocity.y, this.surgeActive ? -42 : -35);
+          motion.slide = true;
+        } else if (progress < 0.75) {
           this.heading = steer(this.heading, moveHeading, 2.7 * dt);
           this._dash(motion, this.surgeActive ? 1.5 : 1.35);
           motion.slide = true;
         }
-        if (!this.clawed && progress >= 0.5) {
+        if (!this.clawed && (this.diving || progress >= 0.5)) {
           this.clawed = true;
           this._emit('ink', human.position, this.heading, 1.15);
         }
@@ -328,10 +352,12 @@ export class ZodiacAbilities {
         if (this.vaulting && progress < 0.72) this._dash(motion, this.surgeActive ? 1.25 : 1.15);
         motion.gravityScale = this.vaulting ? 0.83 : 1;
         motion.allowClimb = false;
-        if (this.vaulting && jumpPressed && progress > 0.1) {
+        if (this.vaulting && jumpPressed) this.reboundUntil = this.time + WALL_REBOUND_BUFFER;
+        if (this.vaulting && this.time < this.reboundUntil && progress > 0.1) {
           this.wallProbe.copy(human.position).y += human.height * 0.5;
           const direction = directionAt(this.effectDirection, this.heading);
-          if (this.city.raycast(this.wallProbe, direction, 3.2) <= 3.2) {
+          const reach = human.radius + 2.4;
+          if (this.city.raycast(this.wallProbe, direction, reach) <= reach) {
             this.vaulting = false;
             this.wallKickYaw = this.heading + Math.PI;
             this.wallKickUntil = this.time + WALL_KICK_PUSH_TIME * 1.5;
@@ -345,13 +371,14 @@ export class ZodiacAbilities {
         if (jumpPressed && this.time >= this.nextFlap && this.flaps < 3) {
           this.flaps++;
           this.nextFlap = this.time + 0.32;
-          motion.lift = Math.max(motion.lift ?? human.velocity.y, 11 * (this.surgeActive ? 1.22 : 1));
+          this.flapBoostUntil = this.time + FLAP_BOOST_TIME;
+          motion.lift = Math.max(motion.lift ?? human.velocity.y, 13 * (this.surgeActive ? 1.22 : 1));
           this._emit('ink', human.position, moveHeading, 0.95);
         }
         motion.jump = false;
         motion.gravityScale = human.velocity.y > 0 ? 0.75 : 0.48;
         motion.fallLimit = 5;
-        motion.speedScale = this.surgeActive ? 1.35 : 1.2;
+        motion.speedScale = (this.surgeActive ? 1.35 : 1.2) * (this.time < this.flapBoostUntil ? 1.25 : 1);
         motion.allowClimb = false;
         motion.slide = true;
         break;
@@ -382,7 +409,7 @@ export class ZodiacAbilities {
     const result = human.update(dt, finalMotion);
     if (this.id === 'horse') {
       const travel = Math.hypot(human.position.x - this.travelStart.x, human.position.z - this.travelStart.z);
-      this.gallop = travel > human.runSpeed * dt * 0.3
+      this.gallop = human.grounded && travel > human.runSpeed * dt * 0.3
         ? Math.min(1, this.gallop + dt * 1.25) : Math.max(0, this.gallop - dt * 4);
       if (this.gallop > 0.6 && this.time >= this.nextInk) {
         this.nextInk = this.time + 0.55;
