@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ZodiacAbilities, ZODIAC_ABILITIES, ZODIAC_IMPACTS } from '../src/zodiac-abilities.js';
 
 globalThis.document ??= { createElementNS: () => ({ addEventListener() {}, removeEventListener() {} }) };
-const { Boykisser } = await import('../src/boykisser.js');
+const { GroundCharacter } = await import('../src/ground-character.js');
 
 const DT = 0.025;
 const WALL_YAW = Math.PI / 2;
@@ -28,7 +28,7 @@ function setup(id, wall = false, wallHeight = 10) {
       return distance <= maxDistance ? distance : Infinity;
     },
   };
-  const actor = new Boykisser(new THREE.Scene(), city, { yaw: WALL_YAW });
+  const actor = new GroundCharacter(new THREE.Scene(), city, { yaw: WALL_YAW });
   const abilities = new ZodiacAbilities({
     city,
     onEffect: ({ id, type, position }) => events.push({ id, type, position: position.clone() }),
@@ -154,7 +154,7 @@ test('Rabbit can chain three separated lifts and changing characters preserves c
   assert.ok(use());
   step(10);
   assert.ok(!use());
-  abilities.select('boykisser');
+  abilities.select('unsupported');
   assert.equal(abilities.active, false);
   step();
   abilities.select('rabbit');
@@ -199,7 +199,7 @@ test('Horse gains speed while moving and Goat climbs more quickly than the base 
   assert.ok(horse.actor.position.x - beforeLastFrame > initial * 1.7);
 
   const goat = setup('goat', true);
-  const base = setup('boykisser', true);
+  const base = setup('unsupported', true);
   goat.use();
   goat.step(14, { forward: 1, sprint: true });
   base.step(14, { forward: 1, sprint: true });

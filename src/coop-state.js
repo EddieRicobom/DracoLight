@@ -2,7 +2,7 @@ import { ZODIAC_IMPACTS } from './zodiac-abilities.js';
 import { ZODIAC_INK } from './zodiac-ink.js';
 import { isZodiacSpecies } from './zodiac-species.js';
 
-const DEFAULT_SPECIES = 'boykisser';
+const DEFAULT_SPECIES = 'rat';
 const MOTIONS = new Set(['idle', 'walk', 'run', 'climb', 'air']);
 const IMPACT_DISTANCE = 45;
 // A charging animal can hit neighbouring walls within a fraction of a second.
@@ -40,11 +40,11 @@ export function readCoopState(message, { role, peerId, selfId }) {
 
   if (mode === 'human') {
     const { species } = message;
-    // Earlier clients sent only mode and rendered Boykisser for every human.
+    // Older clients may send a missing or unsupported species.
     state.species = isZodiacSpecies(species) ? species : DEFAULT_SPECIES;
     state.facingYaw = Number.isFinite(message.facingYaw) ? message.facingYaw : message.yaw;
     state.verticalSpeed = bounded(message.verticalSpeed, -300, 300);
-    state.ability = message.ability === true && state.species !== DEFAULT_SPECIES;
+    state.ability = message.ability === true && isZodiacSpecies(species);
   }
   return state;
 }

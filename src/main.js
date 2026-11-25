@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GameAudio } from './audio.js';
 import { Dragon, PALETTES } from './dragon.js';
-import { Boykisser } from './boykisser.js';
+import { GroundCharacter } from './ground-character.js';
 import { ZODIAC_ANIMALS, createZodiacAvatar } from './zodiac.js';
 import { ZodiacAbilities, ZODIAC_ABILITIES, ZODIAC_IMPACTS } from './zodiac-abilities.js';
 import { readCoopState, readCoopZodiacImpact, readCoopZodiacPaint, readCoopZodiacBurst, readCoopZodiacMark, readCoopZodiacScent } from './coop-state.js';
@@ -214,18 +214,13 @@ const FLIGHT = Object.freeze({
   boostDrain: 20,
   recovery: 18,
 });
-const human = new Boykisser(scene, city, { position: new THREE.Vector3(0, 0, 115), yaw: Math.PI });
+const human = new GroundCharacter(scene, city, { position: new THREE.Vector3(0, 0, 115), yaw: Math.PI });
 human.root.visible = false;
 let playerMode = 'dragon';
-let activeSpecies = 'boykisser', zodiacAvatar = null;
-let humanReady = false;
-const humanLoading = human.load().then(() => { humanReady = true; human.model.visible = activeSpecies === 'boykisser'; }).catch((error) => {
-  console.error('Não foi possível carregar o personagem:', error);
-  $('status').textContent = 'Não foi possível carregar o personagem.';
-});
+let activeSpecies = 'rat', zodiacAvatar = null;
 const switchButton = $('switchCharacter');
 const characterSelect = $('characterSelect');
-for (const [id, label] of [['dragon', 'Dragão'], ['boykisser', 'Personagem original'], ...ZODIAC_ANIMALS.map(({ id, label }) => [id, label])]) {
+for (const [id, label] of [['dragon', 'Dragão'], ...ZODIAC_ANIMALS.map(({ id, label }) => [id, label])]) {
   const option = document.createElement('option'); option.value = id; option.textContent = label; characterSelect.append(option);
 }
 const zodiacAbilities = new ZodiacAbilities({ city, onEffect: handleZodiacEffect });
@@ -439,8 +434,7 @@ function handleZodiacEffect({ id, type, position, direction, scale = 1 }) {
   }
 }
 function setSpecies(id) {
-  if (id !== 'boykisser' && !ZODIAC_ABILITIES[id]) return false;
-  if (id === 'boykisser' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return false; }
+  if (!Object.hasOwn(ZODIAC_ABILITIES, id)) return false;
   if (zodiacAvatar) { human.root.remove(zodiacAvatar.root); zodiacAvatar.dispose(); zodiacAvatar = null; }
   zodiacInk?.clear();
   animalInkEffects.reset();
@@ -450,31 +444,22 @@ function setSpecies(id) {
   guestBurstSentAt.clear();
   activeSpecies = id;
   zodiacAbilities.select(id);
-  if (human.model) human.model.visible = id === 'boykisser';
-  if (id !== 'boykisser') {
-    zodiacAvatar = createZodiacAvatar(id, { height: human.height });
-    prepareZodiac(zodiacAvatar.root);
-    human.root.add(zodiacAvatar.root);
-  }
+  zodiacAvatar = createZodiacAvatar(id, { height: human.height });
+  prepareZodiac(zodiacAvatar.root);
+  human.root.add(zodiacAvatar.root);
   return true;
 }
 function refreshCharacterUI() {
   characterSelect.value = playerMode === 'dragon' ? 'dragon' : activeSpecies;
   $('flightKeys').hidden = playerMode !== 'dragon';
   $('groundKeys').hidden = playerMode === 'dragon';
-  $('animalAbilityKeys').hidden = activeSpecies === 'boykisser';
-  $('animalAbilityHelp').hidden = activeSpecies === 'boykisser';
   $('mobileHelp').textContent = playerMode === 'dragon'
     ? 'Use os direcionais de toque para voar e toque em Tinta para disparar. Toque em pausa para escolher a cor.'
-    : activeSpecies === 'boykisser'
-      ? 'Use os direcionais para correr e girar a câmera. Toque em Pular para saltar; avance contra uma parede para escalá-la.'
-      : 'Use os direcionais para correr e girar a câmera. Toque em Pular para saltar; avance contra uma parede para escalá-la. Toque em Habilidade para usar o poder do animal.';
+    : 'Use os direcionais para correr e girar a câmera. Toque em Pular para saltar; avance contra uma parede para escalá-la. Toque em Habilidade para usar o poder do animal.';
   $('characterDescription').textContent = playerMode === 'dragon'
     ? 'Voo livre, tinta, tornados e meteoros.'
-    : activeSpecies === 'boykisser' ? 'Corre rápido e escala prédios.'
-      : `${ZODIAC_ABILITIES[activeSpecies].description} Tinta: ${ZODIAC_INK[activeSpecies].label}. Feche um laço para ganhar ímpeto; com Shift, abra passagens nas paredes; a Obra-prima chama um cometa de tinta.`;
+    : `${ZODIAC_ABILITIES[activeSpecies].description} Tinta: ${ZODIAC_INK[activeSpecies].label}. Feche um laço para ganhar ímpeto; com Shift, abra passagens nas paredes; a Obra-prima chama um cometa de tinta.`;
   const action = $('touchPaint');
-  action.style.display = playerMode === 'dragon' || activeSpecies !== 'boykisser' ? '' : 'none';
   action.textContent = playerMode === 'dragon' ? 'Tinta' : 'Habilidade';
   action.setAttribute('aria-label', playerMode === 'dragon' ? 'Disparar bola de tinta' : 'Usar habilidade');
   $('touchDescend').style.display = playerMode === 'dragon' ? '' : 'none';
@@ -484,7 +469,6 @@ function refreshCharacterUI() {
 function setPlayerMode(mode) {
   if (mode === playerMode) return;
   if (mode === 'dragon' && coop.role === 'guest') return;
-  if (mode === 'human' && activeSpecies === 'boykisser' && !humanReady) { $('status').textContent = 'Aguarde o personagem carregar.'; return; }
   zodiacInk?.clear();
   animalInkEffects.reset();
   animalFlow.reset();
@@ -520,6 +504,7 @@ characterSelect.addEventListener('change', () => {
   refreshCharacterUI();
   if (coop.role === 'guest') sendLocalState();
 });
+setSpecies(activeSpecies);
 refreshCharacterUI();
 let state = 'menu', elapsed = 0, stamina = 100;
 let yaw = Math.PI, pitch = 0, speed = FLIGHT.cruise;
@@ -601,7 +586,7 @@ go.addEventListener('click', start);
 function firePaint() {
   if (state !== 'playing') return;
   if (playerMode === 'dragon') meteor.fire(player.pos, player.fwd, paintColor.value);
-  else if (activeSpecies !== 'boykisser') zodiacAbilities.activate(human, yaw);
+  else zodiacAbilities.activate(human, yaw);
 }
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('click', () => {
@@ -950,19 +935,10 @@ function updateRemote(message) {
       actor.pos.fromArray(message.p); actor.fwd.set(Math.sin(message.yaw), 0, Math.cos(message.yaw)); actor.resetTrail();
       remote = { mode: 'dragon', actor, target: new THREE.Vector3().fromArray(message.p), yaw: message.yaw, trails: [new InkTrail(scene, camera, -9), new InkTrail(scene, camera, 9)] };
     } else {
-      const actor = new Boykisser(scene, city);
-      let avatar = null;
-      if (message.species === 'boykisser') {
-        actor.root.visible = false;
-        actor.load().then(() => {
-          if (remotes.get(message.id)?.actor === actor) actor.root.visible = true;
-          else actor.dispose();
-        }).catch(console.error);
-      } else {
-        avatar = createZodiacAvatar(message.species, { height: actor.height });
-        prepareZodiac(avatar.root);
-        actor.root.add(avatar.root);
-      }
+      const actor = new GroundCharacter(scene, city);
+      const avatar = createZodiacAvatar(message.species, { height: actor.height });
+      prepareZodiac(avatar.root);
+      actor.root.add(avatar.root);
       remote = { mode: 'human', species: message.species, avatar, actor, target: new THREE.Vector3().fromArray(message.p), yaw: message.yaw };
       actor.position.copy(remote.target);
     }
@@ -992,9 +968,8 @@ function animateRemotes(dt) {
       // buffers do not need to be rebuilt at the display refresh rate.
       remote.animationElapsed = (remote.animationElapsed || 0) + dt;
       if (remote.animationElapsed >= 1 / 20) {
-        if (remote.avatar) remote.avatar.animate(remote.animationElapsed, { state: a.state, speed: remote.speed,
+        remote.avatar.animate(remote.animationElapsed, { state: a.state, speed: remote.speed,
           verticalSpeed: remote.verticalSpeed, ability: remote.ability ? remote.species : '' });
-        else a._animate(remote.animationElapsed, remote.speed);
         remote.animationElapsed = 0;
       }
     }
@@ -1046,7 +1021,6 @@ function setRoomControls() {
   $('resetCity').disabled = guest; $('clearPaint').disabled = guest;
 }
 function joinRoom() {
-  if (activeSpecies === 'boykisser' && !humanReady) { $('coopStatus').textContent = 'Aguarde o personagem carregar.'; return; }
   if (coop.join($('coopCode').value, $('coopName').value)) {
     setPlayerMode('human'); setRoomControls();
   }
@@ -1079,7 +1053,7 @@ function sendLocalState() {
     species: playerMode === 'human' ? activeSpecies : undefined,
     facingYaw: playerMode === 'human' ? human.facingYaw : undefined,
     verticalSpeed: playerMode === 'human' ? human.velocity.y : undefined,
-    ability: playerMode === 'human' && activeSpecies !== 'boykisser' && zodiacAbilities.active });
+    ability: playerMode === 'human' && zodiacAbilities.active });
 }
 
 let qualityElapsed = 0, qualityFrames = 0, stableWindows = 0;

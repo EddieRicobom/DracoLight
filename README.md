@@ -32,7 +32,7 @@ O GitHub Actions compila e publica automaticamente alterações em `main`. Nas c
 
 ## Personagem e cooperação
 
-No menu inicial ou de pausa, selecione **Jogar como personagem** para controlar o modelo fornecido. Use W/A/S/D ou o analógico esquerdo para se mover, Shift ou o gatilho direito para correr, e Espaço ou o botão de subir para pular. Corra contra um prédio para escalá-lo. O personagem original não possui tinta; os animais zodiacais possuem.
+No menu inicial ou de pausa, selecione **Jogar como personagem** ou escolha um animal do zodíaco. Use W/A/S/D ou o analógico esquerdo para se mover, Shift ou o gatilho direito para correr, e Espaço ou o botão de subir para pular. Corra contra um prédio para escalá-lo. Cada animal possui uma habilidade e um traço de tinta próprios.
 
 ## Tinta dos animais
 

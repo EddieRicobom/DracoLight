@@ -1,39 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // City loads browser textures at module evaluation; no image data is needed here.
 globalThis.document ??= { createElementNS: () => ({ addEventListener() {}, removeEventListener() {} }) };
-const { Boykisser } = await import('../src/boykisser.js');
-
-function skinnedBounds(root) {
-  root.updateMatrixWorld(true);
-  const bounds = new THREE.Box3();
-  const point = new THREE.Vector3();
-  root.traverse((object) => {
-    if (!object.isMesh || !object.visible) return;
-    for (let i = 0; i < object.geometry.attributes.position.count; i++) {
-      point.fromBufferAttribute(object.geometry.attributes.position, i);
-      if (object.isSkinnedMesh) object.applyBoneTransform(i, point);
-      bounds.expandByPoint(point.applyMatrix4(object.matrixWorld));
-    }
-  });
-  return bounds;
-}
-
-function limbAverage(player, group, axis, posed) {
-  let sum = 0, count = 0;
-  for (const part of player.bakedParts) {
-    const values = posed ? part.mesh.geometry.attributes.position.array : part.base;
-    for (let i = 0; i < part.groups.length; i++) if (part.groups[i] === group && part.influence[i] > 0.7) {
-      sum += values[i * 3 + axis];
-      count++;
-    }
-  }
-  return sum / count;
-}
+const { GroundCharacter } = await import('../src/ground-character.js');
 
 function testCity() {
   return {
@@ -49,42 +20,8 @@ function testCity() {
   };
 }
 
-test('GLB body is scaled to character height without the detached bow', async () => {
-  const file = await readFile(new URL('../public/models/boykisser.glb', import.meta.url));
-  const gltf = await new GLTFLoader().parseAsync(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength), '');
-  const player = new Boykisser(new THREE.Scene(), testCity(), { modelLoader: { loadAsync: async () => gltf } });
-  await player.load();
-  player.root.updateMatrixWorld(true);
-  const body = new THREE.Box3();
-  player.model.traverse((object) => {
-    if (object.isMesh && object.visible) body.union(new THREE.Box3().setFromObject(object));
-  });
-  assert.ok(Math.abs(body.getSize(new THREE.Vector3()).y - player.height) < 0.05);
-  assert.ok(Math.abs(body.min.y) < 0.05);
-  assert.equal(gltf.scene.getObjectByName('Object_140').visible, false);
-  assert.equal(gltf.scene.getObjectByName('Object_141').visible, false);
-  const eyes = gltf.scene.getObjectByName('LeftEye_024').getWorldPosition(new THREE.Vector3());
-  const tail = gltf.scene.getObjectByName('TailRoot_03').getWorldPosition(new THREE.Vector3());
-  assert.ok(eyes.z > tail.z, 'the supplied model faces local +Z');
-  player.update(1 / 60);
-  for (const group of [1, 2]) {
-    assert.ok(limbAverage(player, group, 1, true) < limbAverage(player, group, 1, false) - 0.002,
-      `arm ${group} should move down from the source T-pose`);
-  }
-  const legBefore = limbAverage(player, 3, 2, true);
-  for (const input of [{}, { forward: 1, sprint: true }, { forward: 1 }]) {
-    player.update(1 / 60, input);
-    const posed = skinnedBounds(player.root).getSize(new THREE.Vector3());
-    assert.ok(posed.y < player.height * 1.5, `deformed body too tall: ${posed.y}`);
-    assert.ok(posed.x < player.height * 1.5, `deformed body too wide: ${posed.x}`);
-  }
-  assert.ok(Math.abs(limbAverage(player, 3, 2, true) - legBefore) > 0.0001,
-    'running should swing the legs');
-  player.dispose();
-});
-
 test('runs on the ground, jumps, and climbs a ten metre wall onto its roof', () => {
-  const player = new Boykisser(new THREE.Scene(), testCity());
+  const player = new GroundCharacter(new THREE.Scene(), testCity());
   player.teleport(new THREE.Vector3(0, 40, 0), { ground: true, yaw: Math.PI / 2 });
   assert.equal(player.position.y, 0);
   player.update(1 / 60);
@@ -104,7 +41,7 @@ test('runs on the ground, jumps, and climbs a ten metre wall onto its roof', () 
 });
 
 test('diagonal input does not exceed running speed', () => {
-  const player = new Boykisser(new THREE.Scene(), testCity());
+  const player = new GroundCharacter(new THREE.Scene(), testCity());
   player.teleport(new THREE.Vector3(-20, 0, 20), { ground: true, yaw: 0 });
   const before = player.position.clone();
   player.update(0.05, { forward: 1, strafe: 1, sprint: true, yaw: 0 });
@@ -113,7 +50,7 @@ test('diagonal input does not exceed running speed', () => {
 });
 
 test('can jump on the first frame after teleporting to a clear street', () => {
-  const player = new Boykisser(new THREE.Scene(), testCity());
+  const player = new GroundCharacter(new THREE.Scene(), testCity());
   player.teleport(new THREE.Vector3(0, 40, 0), { ground: true });
   assert.equal(player.update(0.05, { jump: true, sweep: true }), 'air');
   assert.ok(player.position.y > 0);
@@ -121,7 +58,7 @@ test('can jump on the first frame after teleporting to a clear street', () => {
 });
 
 test('half stick input gives half speed and movement facing leaves the camera yaw intact', () => {
-  const player = new Boykisser(new THREE.Scene(), testCity());
+  const player = new GroundCharacter(new THREE.Scene(), testCity());
   const start = new THREE.Vector3(-20, 0, 20);
   player.teleport(start, { ground: true, yaw: 0 });
   player.update(0.05, { strafe: 0.5, yaw: 0, faceMovement: true });
@@ -136,7 +73,7 @@ test('half stick input gives half speed and movement facing leaves the camera ya
 
 test('swept movement catches a thin barrier at high speed and lets a leap clear the roof edge', () => {
   const city = testCity();
-  const player = new Boykisser(new THREE.Scene(), city);
+  const player = new GroundCharacter(new THREE.Scene(), city);
   const yaw = Math.PI / 2;
   player.teleport(new THREE.Vector3(4, 9.1, 0), { yaw });
   player.update(0.05, { forward: 1, sprint: true, lift: 42, allowClimb: false, sweep: true });
@@ -161,7 +98,7 @@ test('swept movement lands on the higher roof edge and falls after clearing it',
     }
     return raycast(origin, direction, maxDistance);
   };
-  const player = new Boykisser(new THREE.Scene(), city);
+  const player = new GroundCharacter(new THREE.Scene(), city);
   const yaw = -Math.PI / 2;
   player.teleport(new THREE.Vector3(0, 0, 0), { ground: true, yaw });
   player.update(0.05, { sweep: true });
@@ -179,7 +116,7 @@ test('swept movement lands on the higher roof edge and falls after clearing it',
 });
 
 test('forward and strafe follow the chase camera at different headings', () => {
-  const player = new Boykisser(new THREE.Scene(), testCity());
+  const player = new GroundCharacter(new THREE.Scene(), testCity());
   const camera = new THREE.PerspectiveCamera();
   const start = new THREE.Vector3(-20, 0, 20);
   for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {

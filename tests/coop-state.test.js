@@ -29,11 +29,11 @@ test('guests render the host as dragon and other players as ground characters', 
   assert.equal(readCoopState({ ...packet, id: 'guest-2' }, guest), null);
 });
 
-test('legacy and unknown ground species use Boykisser', () => {
+test('legacy and unknown ground species use the rat', () => {
   const ground = { ...packet, mode: 'human', id: 'guest-1' };
   for (const species of [undefined, 'boykisser', 'dragon', '__proto__', ['rabbit']]) {
-    assert.equal(readCoopState({ ...ground, species }, host).species, 'boykisser');
-    assert.equal(readCoopState({ ...ground, species }, guest).species, 'boykisser');
+    assert.equal(readCoopState({ ...ground, species }, host).species, 'rat');
+    assert.equal(readCoopState({ ...ground, species }, guest).species, 'rat');
   }
 });
 

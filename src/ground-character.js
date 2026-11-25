@@ -1,14 +1,12 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CH, HALF } from './city.js';
-import { animateBakedParts } from './boykisser-animation.js';
 
 const DOWN = new THREE.Vector3(0, -1, 0);
 const FOOTPRINT_CORNERS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
 /** A ground based playable character. `position` is the point between the feet. */
-export class Boykisser {
+export class GroundCharacter {
   constructor(scene, city, options = {}) {
     this.scene = scene;
     this.city = city;
@@ -23,131 +21,16 @@ export class Boykisser {
     this.climbSpeed = options.climbSpeed ?? 13;
     this.jumpSpeed = options.jumpSpeed ?? 12;
     this.gravity = options.gravity ?? 34;
-    this.modelUrl = options.modelUrl ?? `${import.meta.env?.BASE_URL ?? '/'}models/boykisser.glb`;
-    this.modelLoader = options.modelLoader ?? new GLTFLoader();
-    this.modelYawOffset = options.modelYawOffset ?? 0;
     this.root = new THREE.Group();
-    this.root.name = 'Boykisser player';
+    this.root.name = 'Ground character';
     this.root.position.copy(this.position);
     scene.add(this.root);
-    this.model = null;
-    this.bakedParts = [];
-    this.bones = {};
-    this.ready = false;
     this.grounded = false;
     this.climbing = false;
     this.climbYaw = null;
     this.state = 'idle';
-    this.phase = 0;
     this._origin = new THREE.Vector3();
     this._move = new THREE.Vector3();
-  }
-
-  async load() {
-    const gltf = await this.modelLoader.loadAsync(this.modelUrl);
-    const model = gltf.scene;
-    // This GLB exports the bow about 1.3 m above a body only 0.065 m tall.
-    // Including that detached bow in the bounds shrinks the character to a head.
-    const bounds = new THREE.Box3();
-    model.updateMatrixWorld(true);
-    model.traverse((object) => {
-      if (!object.isMesh) return;
-      if (object.name === 'Object_140' || object.name === 'Object_141') {
-        object.visible = false;
-        return;
-      }
-      bounds.union(new THREE.Box3().setFromObject(object));
-    });
-    const size = bounds.getSize(new THREE.Vector3());
-    if (!Number.isFinite(size.y) || size.y <= 0) throw new Error('Boykisser model has no usable height');
-    const center = bounds.getCenter(new THREE.Vector3());
-    this._bakeBody(model, bounds);
-    this._lastLimbSwing = undefined;
-    const visual = new THREE.Group();
-    visual.scale.setScalar(this.height / size.y);
-    model.position.set(-center.x, -bounds.min.y, -center.z);
-    visual.rotation.y = this.modelYawOffset;
-    visual.add(model);
-    model.traverse((object) => {
-      if (object.isMesh) {
-        object.castShadow = true;
-        object.receiveShadow = true;
-      }
-      if (object.isBone) {
-        const key = object.name.replace(/_\d+$/, '');
-        if (!this.bones[key]) this.bones[key] = { bone: object, rest: object.quaternion.clone() };
-      }
-    });
-    this.root.add(visual);
-    this.model = visual;
-    this.ready = true;
-    return this;
-  }
-
-  _bakeBody(model, bounds) {
-    const sourceMeshes = [];
-    model.traverse((object) => {
-      if (object.isSkinnedMesh && object.visible) sourceMeshes.push(object);
-    });
-    const modelInverse = model.matrixWorld.clone().invert();
-    const point = new THREE.Vector3();
-    this.bodyCenterZ = bounds.getCenter(new THREE.Vector3()).z;
-    this.armPivotY = bounds.min.y + bounds.getSize(new THREE.Vector3()).y * 0.72;
-    this.legPivotY = bounds.min.y + bounds.getSize(new THREE.Vector3()).y * 0.44;
-    this.armPivotX = bounds.getSize(new THREE.Vector3()).x * 0.17;
-    this.legPivotX = bounds.getSize(new THREE.Vector3()).x * 0.12;
-    for (const source of sourceMeshes) {
-      const geometry = source.geometry.clone();
-      const original = source.geometry.attributes.position;
-      const positions = new Float32Array(original.count * 3);
-      const groups = new Uint8Array(original.count);
-      const influence = new Float32Array(original.count);
-      const boneNames = source.skeleton.bones.map((bone) => bone.name);
-      const indices = source.geometry.attributes.skinIndex;
-      const weights = source.geometry.attributes.skinWeight;
-      for (let i = 0; i < original.count; i++) {
-        point.fromBufferAttribute(original, i);
-        source.applyBoneTransform(i, point);
-        point.applyMatrix4(source.matrixWorld).applyMatrix4(modelInverse);
-        positions.set(point.toArray(), i * 3);
-        const score = [0, 0, 0, 0, 0];
-        for (let k = 0; k < 4; k++) {
-          const name = boneNames[indices.getComponent(i, k)] || '';
-          const weight = weights.getComponent(i, k);
-          if (/^(Shoulder|Arm|Elbow|Wrist|Thumb|Index|Middle|Ring|Little)_L/.test(name)) score[1] += weight;
-          else if (/^(Shoulder|Arm|Elbow|Wrist|Thumb|Index|Middle|Ring|Little)_R/.test(name)) score[2] += weight;
-          else if (/^(Leg|Knee|Foot)_L/.test(name)) score[3] += weight;
-          else if (/^(Leg|Knee|Foot)_R/.test(name)) score[4] += weight;
-        }
-        for (let group = 1; group <= 4; group++) if (score[group] > influence[i]) {
-          influence[i] = score[group];
-          groups[i] = group;
-        }
-      }
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions.slice(), 3).setUsage(THREE.DynamicDrawUsage));
-      geometry.deleteAttribute('skinIndex');
-      geometry.deleteAttribute('skinWeight');
-      geometry.computeVertexNormals();
-      geometry.computeBoundingBox();
-      geometry.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geometry, source.material);
-      mesh.name = `${source.name} animated`;
-      mesh.castShadow = source.castShadow;
-      mesh.receiveShadow = source.receiveShadow;
-      mesh.frustumCulled = false;
-      model.add(mesh);
-      source.visible = false;
-      this.bakedParts.push({ mesh, base: positions, groups, influence });
-    }
-  }
-
-  _animateLimbs(speed) {
-    const stride = this.state === 'climb' ? 0.45 : this.state === 'run' ? 0.55 : this.state === 'walk' ? 0.38 : 0;
-    const swing = Math.sin(this.phase) * stride;
-    // Standing still keeps the same pose; avoid touching and uploading all vertices again.
-    if (swing === this._lastLimbSwing) return;
-    this._lastLimbSwing = swing;
-    animateBakedParts(this.bakedParts, swing, this);
   }
 
   /** Move to a safe starting point. Set ground=true when changing from flight. */
@@ -216,29 +99,6 @@ export class Boykisser {
           this.city.chunkAt(x + dx, y + this.height - 0.25, z + dz) >= 0) return true;
     }
     return false;
-  }
-
-  _pose(name, angle, weight = 1) {
-    const entry = this.bones[name];
-    if (!entry) return;
-    entry.bone.quaternion.copy(entry.rest).multiply(new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(angle.x * weight, angle.y * weight, angle.z * weight)
-    ));
-  }
-
-  _animate(dt, speed) {
-    if (this.model && !this.model.visible) return;
-    const active = this.state === 'run' || this.state === 'walk' || this.state === 'climb';
-    this.phase += dt * (this.state === 'climb' ? 9 : 5 + speed * 0.45);
-    const bob = active ? Math.abs(Math.sin(this.phase)) * 0.08 : Math.sin(this.phase * 0.3) * 0.025;
-    // The supplied inverse bind matrices stretch joint rotations. The original
-    // skin weights instead drive the baked, correctly scaled surface.
-    if (this.model) {
-      this.model.position.y = bob;
-      this.model.rotation.x = this.state === 'run' ? -0.07 : this.state === 'climb' ? 0.08 : 0;
-      this.model.rotation.z = active ? Math.sin(this.phase) * 0.018 : 0;
-    }
-    this._animateLimbs(speed);
   }
 
   /**
@@ -321,7 +181,6 @@ export class Boykisser {
       }
     } else this.facingYaw = this.yaw;
     this.root.rotation.y = this.facingYaw;
-    this._animate(dt, speed);
     return this.state;
   }
 
@@ -338,11 +197,5 @@ export class Boykisser {
 
   dispose() {
     this.scene.remove(this.root);
-    this.model?.traverse((object) => {
-      if (object.isMesh) {
-        object.geometry?.dispose();
-        for (const material of [object.material].flat()) material?.dispose();
-      }
-    });
   }
 }
