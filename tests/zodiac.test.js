@@ -46,6 +46,48 @@ test('every zodiac rig moves in a run and changes pose in the air', () => {
   }
 });
 
+test('ground movement keeps visible differences in each species’ gait', () => {
+  const rabbit = createZodiacAvatar('rabbit');
+  const horse = createZodiacAvatar('horse');
+  const snake = createZodiacAvatar('snake');
+  const legs = (avatar) => avatar.root.children[0].children.slice(2, 6);
+  const ramp = { state: 'run', speed: 35 };
+  for (const avatar of [rabbit, horse, snake]) avatar.animate(0.1, ramp);
+
+  const [rabbitFrontLeft, rabbitFrontRight, rabbitBackLeft, rabbitBackRight] = legs(rabbit);
+  assert.equal(rabbitFrontLeft.rotation.x, rabbitFrontRight.rotation.x);
+  assert.equal(rabbitBackLeft.rotation.x, rabbitBackRight.rotation.x);
+  assert.ok(rabbitFrontLeft.rotation.x * rabbitBackLeft.rotation.x < 0);
+
+  const [horseFrontLeft, horseFrontRight] = legs(horse);
+  assert.notEqual(horseFrontLeft.rotation.x, horseFrontRight.rotation.x);
+
+  const [snakeTail, snakeNeck] = snake.root.children[0].children;
+  assert.notEqual(snakeTail.rotation.y, 0);
+  assert.notEqual(snakeNeck.rotation.y, 0);
+  assert.notEqual(snakeTail.rotation.y, snakeNeck.rotation.y);
+  for (const avatar of [rabbit, horse, snake]) avatar.dispose();
+});
+
+test('ability poses open the rooster’s wings and lower the dog’s nose', () => {
+  const rooster = createZodiacAvatar('rooster');
+  const dog = createZodiacAvatar('dog');
+  const roosterWing = rooster.root.children[0].children[2];
+  const dogHead = dog.root.children[0].children[1];
+  const folded = Math.abs(roosterWing.rotation.y);
+  rooster.animate(0.15, { ability: 'rooster' });
+  assert.ok(Math.abs(roosterWing.rotation.y) < folded / 2);
+  rooster.animate(0.3, { state: 'idle' });
+  assert.ok(Math.abs(roosterWing.rotation.y) > folded * 0.95);
+
+  dog.animate(0.15, { ability: 'dog' });
+  assert.ok(dogHead.rotation.x > 0.24);
+  dog.animate(0.3, { state: 'idle' });
+  assert.ok(Math.abs(dogHead.rotation.x) < 0.05);
+  rooster.dispose();
+  dog.dispose();
+});
+
 test('disposing an avatar detaches and releases its resources only', () => {
   const own = createZodiacAvatar('rabbit');
   const other = createZodiacAvatar('rabbit');

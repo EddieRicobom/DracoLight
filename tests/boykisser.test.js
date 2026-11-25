@@ -112,6 +112,35 @@ test('diagonal input does not exceed running speed', () => {
   player.dispose();
 });
 
+test('half stick input gives half speed and movement facing leaves the camera yaw intact', () => {
+  const player = new Boykisser(new THREE.Scene(), testCity());
+  const start = new THREE.Vector3(-20, 0, 20);
+  player.teleport(start, { ground: true, yaw: 0 });
+  player.update(0.05, { strafe: 0.5, yaw: 0, faceMovement: true });
+  assert.ok(Math.abs(start.x - player.position.x - player.walkSpeed * 0.05 / 2) < 0.001);
+  assert.equal(player.yaw, 0);
+  assert.ok(player.facingYaw < -0.9);
+  assert.equal(player.root.rotation.y, player.facingYaw);
+  player.teleport(start, { yaw: 1 });
+  assert.equal(player.facingYaw, 1);
+  player.dispose();
+});
+
+test('swept movement catches a thin barrier at high speed and lets a leap clear the roof edge', () => {
+  const city = testCity();
+  const player = new Boykisser(new THREE.Scene(), city);
+  const yaw = Math.PI / 2;
+  player.teleport(new THREE.Vector3(4, 9.1, 0), { yaw });
+  player.update(0.05, { forward: 1, sprint: true, lift: 42, allowClimb: false, sweep: true });
+  assert.ok(player.position.x > 5 && player.position.y > 10);
+
+  city.chunkAt = (x, y) => x >= 2 && x <= 2.5 && y < 10 ? 1 : -1;
+  player.teleport(new THREE.Vector3(), { yaw });
+  player.update(0.05, { forward: 1, sprint: true, speedScale: 3, allowClimb: false, sweep: true });
+  assert.ok(player.position.x < 2);
+  player.dispose();
+});
+
 test('forward and strafe follow the chase camera at different headings', () => {
   const player = new Boykisser(new THREE.Scene(), testCity());
   const camera = new THREE.PerspectiveCamera();

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  readCoopState, readCoopZodiacImpact, readCoopZodiacPaint, readCoopZodiacMark, readCoopZodiacBurst,
+  readCoopState, readCoopZodiacImpact, readCoopZodiacPaint, readCoopZodiacMark, readCoopZodiacScent, readCoopZodiacBurst,
 } from '../src/coop-state.js';
 import { ZODIAC_IMPACTS } from '../src/zodiac-abilities.js';
 
@@ -74,15 +74,37 @@ test('requires the connected guest to be playing the requested destructive speci
 
 test('checks three-dimensional distance and the host impact interval', () => {
   const edge = { ...impactPacket, p: [10, 45, 10] };
-  assert.ok(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.5 }));
+  assert.ok(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.94 }));
   assert.equal(readCoopZodiacImpact({ ...edge, p: [11, 45, 10] }, impactContext), null);
-  assert.equal(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.501 }), null);
+  assert.equal(readCoopZodiacImpact(edge, { ...impactContext, lastImpactAt: 6.96 }), null);
+});
+
+test('a guest animal relays animation and facing with a compatible legacy fallback', () => {
+  const state = readCoopState({ ...packet, species: 'rooster', yaw: 1, facingYaw: 2, verticalSpeed: -900, ability: true }, host);
+  assert.equal(state.facingYaw, 2);
+  assert.equal(state.verticalSpeed, -300);
+  assert.equal(state.ability, true);
+  assert.deepEqual(readCoopState(state, guest), state);
+  const legacy = readCoopState({ ...packet, species: 'rabbit', yaw: 1 }, host);
+  assert.equal(legacy.facingYaw, 1);
+  assert.equal(legacy.verticalSpeed, 0);
+  assert.equal(legacy.ability, false);
 });
 
 const paintPacket = {
   type: 'zodiac-paint', species: 'rabbit', p: [10, 0.7, 25], yaw: 0.5, scale: 1.2, color: '#ef4444',
 };
 const paintContext = { remote: { mode: 'human', species: 'rabbit', target: { x: 10, y: 0, z: 20 } }, elapsed: 7 };
+
+test('dog scent path is bounded and accepted as a single cooperative event', () => {
+  const message = { type: 'zodiac-scent', p: [10, 0, 20], yaw: 0.5, distance: 42, color: '#ef4444' };
+  const context = { remote: { mode: 'human', species: 'dog', target: { x: 10, y: 0, z: 20 } }, elapsed: 7 };
+  assert.deepEqual(readCoopZodiacScent(message, context), { p: message.p, yaw: 0.5, distance: 42, color: '#ef4444' });
+  assert.equal(readCoopZodiacScent({ ...message, distance: 43 }, context), null);
+  assert.equal(readCoopZodiacScent(message, { ...context, lastScentAt: 6.8 }), null);
+  assert.equal(readCoopZodiacScent(message, { ...context, remote: { mode: 'human', species: 'dog' } }), null);
+  assert.equal(readCoopZodiacScent(message, { ...context, remote: { ...context.remote, species: 'rabbit' } }), null);
+});
 
 test('accepts a nearby guest brushstroke with its own colour and size', () => {
   assert.deepEqual(readCoopZodiacPaint(paintPacket, paintContext), {

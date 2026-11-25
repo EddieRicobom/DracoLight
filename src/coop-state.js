@@ -5,7 +5,8 @@ import { isZodiacSpecies } from './zodiac-species.js';
 const DEFAULT_SPECIES = 'boykisser';
 const MOTIONS = new Set(['idle', 'walk', 'run', 'climb', 'air']);
 const IMPACT_DISTANCE = 45;
-const IMPACT_INTERVAL = 0.5;
+// A charging animal can hit neighbouring walls within a fraction of a second.
+const IMPACT_INTERVAL = 0.05;
 const PAINT_DISTANCE = 80;
 const PAINT_INTERVAL = 0.1;
 const BURST_DISTANCE = 100;
@@ -41,6 +42,9 @@ export function readCoopState(message, { role, peerId, selfId }) {
     const { species } = message;
     // Earlier clients sent only mode and rendered Boykisser for every human.
     state.species = isZodiacSpecies(species) ? species : DEFAULT_SPECIES;
+    state.facingYaw = Number.isFinite(message.facingYaw) ? message.facingYaw : message.yaw;
+    state.verticalSpeed = bounded(message.verticalSpeed, -300, 300);
+    state.ability = message.ability === true && state.species !== DEFAULT_SPECIES;
   }
   return state;
 }
@@ -91,6 +95,19 @@ export function readCoopZodiacMark(message, { remote, elapsed, lastMarkAt = -Inf
   const dz = p[2] - remote.target?.z;
   if (dx * dx + dy * dy + dz * dz <= PAINT_DISTANCE * PAINT_DISTANCE) return { species, p, radius, color };
   return null;
+}
+
+/** One bounded scent path replaces several independently throttled marks. */
+export function readCoopZodiacScent(message, { remote, elapsed, lastScentAt = -Infinity } = {}) {
+  if (message?.type !== 'zodiac-scent' || remote?.mode !== 'human' || remote.species !== 'dog') return null;
+  const { p, yaw, distance, color } = message;
+  if (!isWorldPosition(p) || !Number.isFinite(yaw) || !Number.isFinite(distance) || distance < 7 || distance > 42
+      || typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)
+      || !Number.isFinite(elapsed) || elapsed - lastScentAt < 0.3) return null;
+  const dx = p[0] - remote.target?.x, dy = p[1] - remote.target?.y, dz = p[2] - remote.target?.z;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return null;
+  if (dx * dx + dy * dy + dz * dz > PAINT_DISTANCE * PAINT_DISTANCE) return null;
+  return { p, yaw, distance, color };
 }
 
 /** Validate a guest's destructive ink move (wall breach or called-down comet). */

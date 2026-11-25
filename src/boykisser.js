@@ -13,7 +13,8 @@ export class Boykisser {
     this.city = city;
     this.position = new THREE.Vector3().copy(options.position || new THREE.Vector3(0, 0, 0));
     this.velocity = new THREE.Vector3();
-    this.yaw = options.yaw ?? Math.PI;
+    this.yaw = Number.isFinite(options.yaw) ? options.yaw : Math.PI;
+    this.facingYaw = this.yaw;
     this.height = options.height ?? 3.4;
     this.radius = options.radius ?? 0.8;
     this.walkSpeed = options.walkSpeed ?? 18;
@@ -151,7 +152,8 @@ export class Boykisser {
   /** Move to a safe starting point. Set ground=true when changing from flight. */
   teleport(position, { ground = false, yaw = this.yaw } = {}) {
     this.position.copy(position);
-    this.yaw = yaw;
+    this.yaw = Number.isFinite(yaw) ? yaw : this.yaw;
+    this.facingYaw = this.yaw;
     this.velocity.set(0, 0, 0);
     this.grounded = false;
     this.climbing = false;
@@ -175,7 +177,7 @@ export class Boykisser {
       }
     }
     this.root.position.copy(this.position);
-    this.root.rotation.y = this.yaw;
+    this.root.rotation.y = this.facingYaw;
   }
 
   /** Highest solid surface below `topY`, including the street at y=0. */
@@ -225,10 +227,11 @@ export class Boykisser {
   update(dt, {
     forward = 0, strafe = 0, sprint = false, jump = false, yaw = this.yaw, movementYaw = yaw,
     speedScale = 1, climbScale = 1, gravityScale = 1, lift, fallLimit = Infinity,
-    allowClimb = true, slide = false, sweep = false,
+    allowClimb = true, slide = false, sweep = false, faceMovement = false,
   } = {}) {
     dt = clamp(Number.isFinite(dt) ? dt : 0, 0, 0.05);
-    this.yaw = yaw;
+    this.yaw = Number.isFinite(yaw) ? yaw : this.yaw;
+    movementYaw = Number.isFinite(movementYaw) ? movementYaw : this.yaw;
     const magnitude = Math.hypot(forward, strafe);
     const inputLength = Math.min(1, magnitude);
     const speed = (sprint ? this.runSpeed : this.walkSpeed) * inputLength * speedScale;
@@ -237,11 +240,12 @@ export class Boykisser {
       0,
       Math.cos(movementYaw) * forward + Math.sin(movementYaw) * strafe
     );
-    if (magnitude > 1) this._move.divideScalar(magnitude);
+    const heading = magnitude > 0 ? Math.atan2(this._move.x, this._move.z) : this.facingYaw;
+    if (magnitude > 0) this._move.divideScalar(magnitude);
     this._move.multiplyScalar(speed * dt);
-    const x = clamp(this.position.x + this._move.x, -HALF + this.radius, HALF - this.radius);
-    const z = clamp(this.position.z + this._move.z, -HALF + this.radius, HALF - this.radius);
-    const previousY = this.position.y;
+    const { x: previousX, y: previousY, z: previousZ } = this.position;
+    const x = clamp(previousX + this._move.x, -HALF + this.radius, HALF - this.radius);
+    const z = clamp(previousZ + this._move.z, -HALF + this.radius, HALF - this.radius);
     const blocked = this._blockedPath(x, z, sweep);
     const pushingWall = allowClimb && lift === undefined && blocked && inputLength > 0.15 && forward > 0.1;
     this.climbing = pushingWall;
@@ -258,8 +262,8 @@ export class Boykisser {
       const nextY = Math.max(0, previousY + this.velocity.y * dt);
       if (sweep && nextY > previousY && this._occupied(this.position.x, nextY, this.position.z)) this.velocity.y = 0;
       else this.position.y = nextY;
-      const raisedIntoWall = sweep && this.position.y > previousY && this._blockedPath(x, z, true);
-      if (!blocked && !raisedIntoWall) { this.position.x = x; this.position.z = z; }
+      const blockedAfterLift = sweep && this.position.y > previousY ? this._blockedPath(x, z, true) : blocked;
+      if (!blockedAfterLift) { this.position.x = x; this.position.z = z; }
       else if (slide) {
         if (!this._blockedPath(x, this.position.z, sweep)) this.position.x = x;
         else if (!this._blockedPath(this.position.x, z, sweep)) this.position.z = z;
@@ -281,7 +285,16 @@ export class Boykisser {
     else if (inputLength < 0.08) this.state = 'idle';
     else this.state = sprint ? 'run' : 'walk';
     this.root.position.copy(this.position);
-    this.root.rotation.y = yaw;
+    if (faceMovement) {
+      if (inputLength > 0.08) {
+        const movedX = this.position.x - previousX;
+        const movedZ = this.position.z - previousZ;
+        const facingTarget = movedX || movedZ ? Math.atan2(movedX, movedZ) : heading;
+        const turn = facingTarget - this.facingYaw;
+        this.facingYaw += Math.atan2(Math.sin(turn), Math.cos(turn)) * (1 - Math.exp(-20 * dt));
+      }
+    } else this.facingYaw = this.yaw;
+    this.root.rotation.y = this.facingYaw;
     this._animate(dt, speed);
     return this.state;
   }

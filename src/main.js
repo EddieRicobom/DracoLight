@@ -4,7 +4,7 @@ import { Dragon, PALETTES } from './dragon.js';
 import { Boykisser } from './boykisser.js';
 import { ZODIAC_ANIMALS, createZodiacAvatar } from './zodiac.js';
 import { ZodiacAbilities, ZODIAC_ABILITIES, ZODIAC_IMPACTS } from './zodiac-abilities.js';
-import { readCoopState, readCoopZodiacImpact, readCoopZodiacPaint, readCoopZodiacBurst, readCoopZodiacMark } from './coop-state.js';
+import { readCoopState, readCoopZodiacImpact, readCoopZodiacPaint, readCoopZodiacBurst, readCoopZodiacMark, readCoopZodiacScent } from './coop-state.js';
 import { createCoop } from './coop.js';
 import { City, CH, HALF } from './city.js';
 import { createCityRelics } from './relics.js';
@@ -291,8 +291,7 @@ function triggerInkSurf() {
 
 function syncGuestInk(id, position, direction, scale) {
   if (coop.role !== 'guest' || elapsed - guestInkSentAt < 0.12) return;
-  guestInkSentAt = elapsed;
-  coop.send({
+  const sent = coop.send({
     type: 'zodiac-paint',
     species: id,
     p: [position.x, position.y, position.z],
@@ -300,6 +299,7 @@ function syncGuestInk(id, position, direction, scale) {
     scale,
     color: paintColor.value,
   });
+  if (sent) guestInkSentAt = elapsed;
 }
 
 function syncGuestMark(position, radius, color) {
@@ -373,7 +373,7 @@ function updateScentPath(dt) {
   inkScentTime -= dt;
   if (inkScentTime > 0) return;
   inkScentTime = 0.35;
-  const target = relics.nearest(human.position, 1100);
+  const target = relics.nearest(human.position, zodiacAbilities.relicGuideRange ?? 1100);
   if (!target) return;
   const dx = target.x - human.position.x, dz = target.z - human.position.z;
   const distance = Math.hypot(dx, dz);
@@ -381,8 +381,9 @@ function updateScentPath(dt) {
   for (let step = 7; step <= Math.min(distance, 42); step += 7) {
     inkPaintPoint.set(human.position.x + dx / distance * step, 0.7, human.position.z + dz / distance * step);
     paintWorld(inkPaintPoint, 1.4, paintColor.value);
-    syncGuestMark(inkPaintPoint, 1.4, paintColor.value);
   }
+  if (coop.role === 'guest' && distance >= 7) coop.send({ type: 'zodiac-scent', p: human.position.toArray(),
+    yaw: Math.atan2(dx, dz), distance: Math.min(distance, 42), color: paintColor.value });
   zodiacAbilities.addInk(0.008);
 }
 
@@ -400,8 +401,6 @@ function handleZodiacEffect({ id, type, position, direction, scale = 1 }) {
   if (type === 'start') {
     fx.dust(position, 1.4, 1);
     if (id === 'dog') inkScentTime = 0;
-    paintInkPattern(id, position, direction, 0.55 * scale);
-    syncGuestInk(id, position, direction, 0.55 * scale);
     return;
   }
   if (type === 'trail') { fx.dust(position, 0.65, 1); return; }
@@ -469,6 +468,9 @@ function refreshCharacterUI() {
   action.style.display = playerMode === 'dragon' || activeSpecies !== 'boykisser' ? '' : 'none';
   action.textContent = playerMode === 'dragon' ? 'Tinta' : 'Habilidade';
   action.setAttribute('aria-label', playerMode === 'dragon' ? 'Disparar bola de tinta' : 'Usar habilidade');
+  $('touchDescend').style.display = playerMode === 'dragon' ? '' : 'none';
+  $('touchAscend').setAttribute('aria-label', playerMode === 'dragon' ? 'Subir' : 'Pular');
+  $('touchRight').setAttribute('aria-label', playerMode === 'dragon' ? 'Direção do voo: deslize o dedo' : 'Direção da câmera: deslize o dedo');
 }
 function setPlayerMode(mode) {
   if (mode === playerMode) return;
@@ -573,9 +575,9 @@ function pause() {
   document.exitPointerLock?.();
   menu.classList.remove('off');
   hud.classList.remove('on');
-  $('sub').textContent = 'Voo pausado';
-  $('msg').textContent = 'Continue quando estiver pronto para explorar o céu e atravessar a cidade.';
-  go.textContent = 'Continuar voo';
+  $('sub').textContent = playerMode === 'dragon' ? 'Voo pausado' : 'Jogo pausado';
+  $('msg').textContent = playerMode === 'dragon' ? 'Continue quando estiver pronto para explorar o céu e atravessar a cidade.' : 'Continue quando estiver pronto para explorar a cidade.';
+  go.textContent = playerMode === 'dragon' ? 'Continuar voo' : 'Continuar jogo';
 }
 go.disabled = true;
 go.textContent = 'Carregando modelo…';
@@ -606,6 +608,7 @@ document.addEventListener('keydown', (e) => {
     else if (state === 'paused') start();
     return;
   }
+  if (e.code === 'KeyE' && !e.repeat && playerMode === 'human') firePaint();
   keys.add(e.code);
 });
 document.addEventListener('keyup', (e) => keys.delete(e.code));
@@ -809,7 +812,7 @@ function updateHud(dt) {
 // The host owns the city; guests send movement only and receive city changes.
 const remotes = new Map();
 const worldHistory = [], worldQueue = [];
-const guestImpacts = new Map(), guestPaints = new Map(), guestBursts = new Map(), guestMarks = new Map();
+const guestImpacts = new Map(), guestPaints = new Map(), guestBursts = new Map(), guestMarks = new Map(), guestScents = new Map();
 let applyingWorld = false, networkTime = 0, worldTime = 0;
 const coop = createCoop({
   onStatus: (message) => { $('coopStatus').textContent = message; },
@@ -826,6 +829,7 @@ const coop = createCoop({
     if (!connected) {
       guestImpacts.delete(id);
       guestMarks.delete(id);
+      guestScents.delete(id);
       guestPaints.delete(id);
       guestBursts.delete(`${id}:breach`); guestBursts.delete(`${id}:comet`);
       removeRemote(id);
@@ -838,7 +842,7 @@ const coop = createCoop({
       const historyEnd = Math.max(0, worldHistory.length - worldQueue.length);
       for (let i = 0; i < historyEnd; i += 30)
         coop.sendTo(id, { type: 'world', events: worldHistory.slice(i, Math.min(i + 30, historyEnd)) });
-    }
+    } else if (coop.role === 'guest') sendLocalState();
   },
   onMessage: (message, peerId) => {
     if (message.type === 'state') {
@@ -846,6 +850,16 @@ const coop = createCoop({
       if (!state) return;
       if (coop.role === 'host') coop.broadcast(state, peerId);
       updateRemote(state);
+    } else if (message.type === 'zodiac-scent' && coop.role === 'host') {
+      const receivedAt = performance.now() / 1000;
+      const request = readCoopZodiacScent(message, { remote: remotes.get(peerId), elapsed: receivedAt, lastScentAt: guestScents.get(peerId) });
+      if (!request) return;
+      guestScents.set(peerId, receivedAt);
+      const direction = new THREE.Vector3(Math.sin(request.yaw), 0, Math.cos(request.yaw));
+      for (let step = 7; step <= request.distance; step += 7) {
+        const point = new THREE.Vector3(request.p[0] + direction.x * step, 0.7, request.p[2] + direction.z * step);
+        paintWorld(point, 1.4, request.color);
+      }
     } else if (message.type === 'zodiac-mark' && coop.role === 'host') {
       const receivedAt = performance.now() / 1000;
       const request = readCoopZodiacMark(message, { remote: remotes.get(peerId), elapsed: receivedAt, lastMarkAt: guestMarks.get(peerId) });
@@ -946,6 +960,9 @@ function updateRemote(message) {
     remotes.set(message.id, remote);
   }
   remote.target.fromArray(message.p); remote.yaw = message.yaw;
+  remote.facingYaw = Number.isFinite(message.facingYaw) ? message.facingYaw : message.yaw;
+  remote.verticalSpeed = Number.isFinite(message.verticalSpeed) ? clamp(message.verticalSpeed, -300, 300) : 0;
+  remote.ability = message.ability === true;
   remote.pitch = Number.isFinite(message.pitch) ? clamp(message.pitch, -1.35, 1.35) : 0;
   remote.speed = Number.isFinite(message.speed) ? clamp(message.speed, 0, 5000) : 0;
   remote.color = typeof message.color === 'string' && /^#[0-9a-f]{6}$/i.test(message.color) ? message.color : '#ef4444';
@@ -960,13 +977,14 @@ function animateRemotes(dt) {
       a.flightSpeed = remote.speed; a.update(dt, elapsed);
       for (const trail of remote.trails) { trail.setColor(remote.color); trail.update(dt, a.pos, a.fwd, remote.speed, remote.speed > 300); }
     } else {
-      a.position.lerp(remote.target, damp(12, dt)); a.root.position.copy(a.position); a.root.rotation.y = remote.yaw;
+      a.position.lerp(remote.target, damp(12, dt)); a.root.position.copy(a.position); a.root.rotation.y = remote.facingYaw;
       a.state = remote.motion;
       // Remote characters need smooth position interpolation, but their limb
       // buffers do not need to be rebuilt at the display refresh rate.
       remote.animationElapsed = (remote.animationElapsed || 0) + dt;
       if (remote.animationElapsed >= 1 / 20) {
-        if (remote.avatar) remote.avatar.animate(remote.animationElapsed, { state: a.state, speed: remote.speed });
+        if (remote.avatar) remote.avatar.animate(remote.animationElapsed, { state: a.state, speed: remote.speed,
+          verticalSpeed: remote.verticalSpeed, ability: remote.ability ? remote.species : '' });
         else a._animate(remote.animationElapsed, remote.speed);
         remote.animationElapsed = 0;
       }
@@ -1049,7 +1067,10 @@ function updateNetwork(dt) {
 function sendLocalState() {
   coop.send({ type: 'state', id: coop.id, mode: playerMode, p: activePosition().toArray(), yaw, pitch,
     speed: actualSpeed, color: paintColor.value, motion: playerMode === 'human' ? human.state : 'air',
-    species: playerMode === 'human' ? activeSpecies : undefined });
+    species: playerMode === 'human' ? activeSpecies : undefined,
+    facingYaw: playerMode === 'human' ? human.facingYaw : undefined,
+    verticalSpeed: playerMode === 'human' ? human.velocity.y : undefined,
+    ability: playerMode === 'human' && activeSpecies !== 'boykisser' && zodiacAbilities.active });
 }
 
 let qualityElapsed = 0, qualityFrames = 0, stableWindows = 0;

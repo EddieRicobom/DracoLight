@@ -9,18 +9,22 @@ const { Boykisser } = await import('../src/boykisser.js');
 const DT = 0.025;
 const WALL_YAW = Math.PI / 2;
 
-function setup(id, wall = false) {
+function setup(id, wall = false, wallHeight = 10) {
   const events = [];
+  const walls = wall ? [{ x: 5, end: 15 }] : [];
   const city = {
     chunkAt(x, y) {
-      return wall && x >= 5 && x < 15 && y >= 0 && y < 10 ? 0 : -1;
+      return y >= 0 && y < wallHeight && walls.some(({ x: start, end }) => x >= start && x < end) ? 0 : -1;
     },
     raycast({ x, y }, direction, maxDistance) {
       let distance = Infinity;
       if (direction.y < 0) {
-        const roof = wall && x >= 5 && x < 15 && y >= 10;
-        distance = y - (roof ? 10 : 0);
-      } else if (wall && x <= 5 && direction.x > 0 && y > 0 && y < 10) distance = (5 - x) / direction.x;
+        const roof = y >= wallHeight && walls.some(({ x: start, end }) => x >= start && x < end);
+        distance = y - (roof ? wallHeight : 0);
+      } else if (direction.x > 0 && y > 0 && y < wallHeight) {
+        const nextWall = walls.find(({ x: start }) => x <= start);
+        if (nextWall) distance = (nextWall.x - x) / direction.x;
+      }
       return distance <= maxDistance ? distance : Infinity;
     },
   };
@@ -36,7 +40,7 @@ function setup(id, wall = false) {
   step();
   const use = () => abilities.activate(actor, WALL_YAW);
   const impacts = () => events.filter(({ type }) => type === 'impact');
-  return { actor, abilities, step, use, impacts };
+  return { actor, abilities, step, use, impacts, walls };
 }
 
 test('all eleven zodiac animals have an ability and three produce world impacts', () => {
@@ -76,6 +80,18 @@ test('Ox emits a single impact at the wall and cannot tunnel through it', () => 
   assert.equal(actor.position.y, 0);
 });
 
+test('Ox keeps charging through a passage but only breaks the first wall', () => {
+  const { actor, step, use, impacts, walls } = setup('ox', true);
+  walls.push({ x: 18, end: 30 });
+  use();
+  while (impacts().length === 0 && actor.position.x < 4) step();
+  assert.equal(impacts().length, 1);
+  walls.shift();
+  step(25);
+  assert.equal(impacts().length, 1);
+  assert.ok(actor.position.x > 15 && actor.position.x < 18);
+});
+
 test('Tiger launches forward and impacts the ground once on landing', () => {
   const { actor, step, use, impacts } = setup('tiger');
   use();
@@ -85,6 +101,16 @@ test('Tiger launches forward and impacts the ground once on landing', () => {
   step(45);
   assert.equal(impacts().length, 1);
   assert.equal(impacts()[0].position.y, 0);
+});
+
+test('Tiger can steer the pounce without snapping straight to the new direction', () => {
+  const { actor, step, use } = setup('tiger');
+  use();
+  step();
+  const launch = actor.position.clone();
+  step(8, { strafe: 1 });
+  const turn = actor.position.clone().sub(launch);
+  assert.ok(turn.x > 9 && turn.z > 2);
 });
 
 test('Rabbit can chain three separated lifts and changing characters preserves cooldown', () => {
@@ -109,6 +135,20 @@ test('Rabbit can chain three separated lifts and changing characters preserves c
   assert.ok(use());
 });
 
+test('Rabbit accepts an early follow-up without applying the lift before the hop interval', () => {
+  const { actor, abilities, step, use } = setup('rabbit');
+  use();
+  step(7);
+  assert.equal(abilities.hops, 1);
+  assert.ok(use());
+  const lift = actor.velocity.y;
+  step();
+  assert.ok(actor.velocity.y < lift);
+  step(2);
+  assert.equal(abilities.hops, 2);
+  assert.ok(actor.velocity.y > lift);
+});
+
 test('Horse gains speed while moving and Goat climbs more quickly than the base actor', () => {
   const horse = setup('horse');
   horse.use();
@@ -126,6 +166,21 @@ test('Horse gains speed while moving and Goat climbs more quickly than the base 
   base.step(14, { forward: 1, sprint: true });
   assert.ok(base.actor.position.y > 0);
   assert.ok(goat.actor.position.y > base.actor.position.y * 2.5);
+});
+
+test('Horse loses gallop speed when blocked and on immediate reversal', () => {
+  const { actor, step, use } = setup('horse', true);
+  actor.position.x = -60;
+  use();
+  step(30, { forward: 1 });
+  const beforeReversal = actor.position.x;
+  step(1, { forward: -1 });
+  assert.ok(beforeReversal - actor.position.x <= actor.runSpeed * DT * 1.01);
+  step(35, { forward: 1 });
+  const wallPosition = actor.position.x;
+  step(16, { forward: 1 });
+  assert.equal(actor.position.x, wallPosition);
+  assert.equal(actor.climbing, false);
 });
 
 test('A wall kick carries the animal away from the climbing surface even when looking elsewhere', () => {
@@ -163,6 +218,31 @@ test('Monkey vaults higher when aimed at a façade and Rooster can glide in the 
   assert.ok(actor.position.x > 24);
 });
 
+test('Monkey rebounds from a reachable façade when the player taps jump', () => {
+  const { actor, step, use } = setup('monkey', true, 30);
+  use();
+  step(8);
+  const wallPosition = actor.position.clone();
+  const rising = actor.velocity.y;
+  step(3, { jump: true });
+  assert.ok(actor.position.x < wallPosition.x - 2);
+  assert.ok(actor.velocity.y > rising);
+});
+
+test('Rooster flaps once per jump press and caps its fall during the glide', () => {
+  const { actor, abilities, step, use } = setup('rooster');
+  actor.position.y = 25;
+  actor.grounded = false;
+  use();
+  step(24);
+  assert.ok(actor.velocity.y >= -5);
+  step(24, { jump: true });
+  assert.equal(abilities.flaps, 1);
+  step();
+  step(1, { jump: true });
+  assert.equal(abilities.flaps, 2);
+});
+
 test('Dog expands relic guidance temporarily and Pig lands on a roof during a fast stomp', () => {
   const dog = setup('dog');
   dog.use();
@@ -179,4 +259,30 @@ test('Dog expands relic guidance temporarily and Pig lands on a roof during a fa
   assert.equal(impacts().length, 1);
   assert.equal(impacts()[0].position.y, 10);
   assert.equal(actor.position.y, 10);
+});
+
+test('Dog runs faster while tracking and spends its masterpiece only once per scent', () => {
+  const { actor, abilities, step, use } = setup('dog');
+  abilities.addInk(1);
+  use();
+  step(10, { forward: 1, sprint: true });
+  assert.ok(actor.position.x > actor.runSpeed * DT * 10 * 1.2);
+  assert.equal(abilities.relicGuideRange, 1375);
+  assert.equal(abilities.ink, 0);
+  abilities.refund(100);
+  assert.ok(!use());
+  step(365);
+  assert.ok(use());
+});
+
+test('Pig rolls from the ground and stomps exactly once at the end of the roll', () => {
+  const { actor, step, use, impacts } = setup('pig');
+  use();
+  step(8);
+  assert.ok(actor.position.x > 9 && actor.position.y > 1);
+  assert.equal(impacts().length, 0);
+  step(50);
+  assert.equal(impacts().length, 1);
+  assert.equal(impacts()[0].position.y, 0);
+  assert.ok(impacts()[0].position.x > 15);
 });
